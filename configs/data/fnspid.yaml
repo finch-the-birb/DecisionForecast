@@ -103,11 +103,20 @@ tickers:
 
 text:
   enabled: true
-  encoder: sentence-transformers/all-MiniLM-L6-v2
+  # Frozen encoder (SYSTEM.md): no joint LLM fine-tune.
+  # Default is a finance *embedding* model, not FinBERT (which is a 3-class sentiment head).
+  # Candidates / overrides:
+  #   FinLang/investopedia_embedding     768-d  ~110M  finance ST (this default; CC-BY-NC-4.0)
+  #   BatuhanECB/FinModernBERT-embed-large-v1  1024-d  ~395M  FinMTEB STS/Summ; set dim=1024 prefix="passage: "
+  #   sentence-transformers/all-MiniLM-L6-v2   384-d  general; set dim=384 prefix=""
+  #   FinanceMTEB/FinE5                  ~7B   skip in core pipeline (VRAM)
+  #   ProsusAI/finbert                   not an embedder — do not use here
+  encoder: FinLang/investopedia_embedding
+  dim: 768
+  prefix: ""
   summary_field: Lsa_summary
   title_field: Article_title
   cache_dir: ${data.root}/cache/embeddings
-  dim: 384
   max_chars: 8000
 
 news_source: nasdaq_exteral_data

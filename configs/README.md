@@ -17,7 +17,9 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
 - Look-back `T=60`, patch `P=12`, stride `6`.
 - Temporal split (no leakage): train ≤ 2021-12-31, val ≤ 2022-12-31, test > 2022-12-31.
 - Dev tickers: 15 liquid symbols in `data/fnspid.yaml`.
-- Text: frozen sentence embeddings (offline cache), late fusion in A/B.
+- Text: frozen **finance** sentence embeddings (`FinLang/investopedia_embedding`, 768-d), late fusion in A/B.
+  Override MiniLM with `data.text.encoder=sentence-transformers/all-MiniLM-L6-v2 data.text.dim=384`.
+  Do not use `ProsusAI/finbert` as the encoder — it is a sentiment classifier.
 
 ## Hypotheses
 

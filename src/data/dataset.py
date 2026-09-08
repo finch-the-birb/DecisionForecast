@@ -373,7 +373,9 @@ def _log_split(name: str, ds: FNSPIDForecastDataset) -> None:
     )
 
 
-def build_datasets(cfg: DictConfig) -> tuple[FNSPIDForecastDataset, ...]:
+def build_datasets(
+    cfg: DictConfig, device: str | torch.device | None = None
+) -> tuple[FNSPIDForecastDataset, ...]:
     root = resolve_data_root(cfg.data.root)
     tickers = list(cfg.data.tickers[cfg.train.ticker_set])
     lookback = int(cfg.data.lookback_T)
@@ -400,6 +402,8 @@ def build_datasets(cfg: DictConfig) -> tuple[FNSPIDForecastDataset, ...]:
             model_name=str(cfg.data.text.encoder),
             dim=int(cfg.data.text.dim),
             max_chars=int(cfg.data.text.max_chars),
+            device=device,
+            prefix=str(cfg.data.text.get("prefix", "") or ""),
         )
         if text_enabled
         else None

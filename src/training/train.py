@@ -14,6 +14,7 @@ from src.data.dataset import build_datasets
 from src.evaluation.metrics import compute_metrics
 from src.explain.projection import save_projection_examples
 from src.models.timexl_a import TimeXLModelA
+from src.utils.device import log_cuda_memory, log_torch_device, resolve_device
 from src.utils.mlflow_helpers import log_cfg_params
 from src.utils.seed import set_seed
 
@@ -21,9 +22,7 @@ log = logging.getLogger(__name__)
 
 
 def _resolve_device(device_cfg: str) -> torch.device:
-    if device_cfg == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(device_cfg)
+    return resolve_device(device_cfg)
 
 
 def build_model(cfg: DictConfig) -> torch.nn.Module:
@@ -70,9 +69,9 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
 def run_training(cfg: DictConfig) -> dict[str, float]:
     set_seed(int(cfg.train.seed))
     device = _resolve_device(str(cfg.train.device))
-    log.info("Device: %s", device)
+    log_torch_device(device, role="train")
 
-    train_ds, val_ds, test_ds = build_datasets(cfg)
+    train_ds, val_ds, test_ds = build_datasets(cfg, device=device)
     log.info(
         "Dataset sizes — train: %d, val: %d, test: %d",
         len(train_ds),
@@ -107,6 +106,11 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
     )
 
     model = build_model(cfg).to(device)
+    param_device = next(model.parameters()).device
+    log.info("Model parameters on %s", param_device)
+    if device.type == "cuda" and param_device.type != "cuda":
+        raise RuntimeError(f"Model parameters on {param_device}, expected {device}")
+    log_cuda_memory("after model.to")
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(cfg.train.lr),
@@ -145,6 +149,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         "First batch text L2 mean=%.4f (0 means empty/zero embeddings)",
                         float(text.norm(dim=-1).mean()),
                     )
+                    log.info("First batch tensors on x=%s text=%s", x.device, text.device)
+                    log_cuda_memory("first train batch")
                 optimizer.zero_grad(set_to_none=True)
                 if isinstance(model, TimeXLModelA):
                     out = model(x, text)
