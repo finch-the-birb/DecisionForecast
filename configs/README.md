@@ -17,14 +17,13 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
 - Look-back `T=60`, patch `P=12`, stride `6`.
 - Temporal split (no leakage): train ≤ 2021-12-31, val ≤ 2022-12-31, test > 2022-12-31.
 - Dev tickers: 15 liquid symbols in `data/fnspid.yaml`.
-- Text: frozen **finance** sentence embeddings (`FinLang/finance-embeddings-investopedia`, 768-d), late fusion in A/B.
-  Override MiniLM with `data.text.encoder=sentence-transformers/all-MiniLM-L6-v2 data.text.dim=384`.
-  Do not use `ProsusAI/finbert` as the encoder — it is a sentiment classifier.
+- Text: frozen **finance** sentence embeddings (`FinLang/finance-embeddings-investopedia`, 768-d).
+  A/B: late fusion. C0: mid add to patches. C1: text as exo token via \(G_{en}\).
 
 ## Hypotheses
 
 - **H1:** A vs B (backbone effect at fixed late fusion). Smoke: `model=a` then `model=b`.
-- **H2:** B vs C0 vs C1 (fusion ablation).
+- **H2:** B vs C0 vs C1 (fusion ablation). Smoke: `model=a,b,c0,c1` with the same caps.
 - **H3:** Explanatory preservation (projection + faithfulness; Phase 4).
 
 ## Commands
@@ -32,6 +31,7 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
 ```bash
 uv sync
 uv run python -m src.training.train --cfg job
-uv run python -m src.training.train model=a train.device=cuda train.ticker_set=dev train.epochs=1
-uv run python -m src.training.train model=b train.device=cuda train.ticker_set=dev train.epochs=1
+for m in a b c0 c1; do
+  uv run python -m src.training.train model=$m train.device=cuda train.ticker_set=dev train.epochs=1
+done
 ```

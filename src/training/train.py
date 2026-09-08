@@ -15,7 +15,7 @@ from src.data.dataset import build_datasets
 from src.evaluation.metrics import compute_metrics
 from src.explain.projection import save_projection_examples
 from src.models.timexl_a import TimeXLModelA
-from src.models.timexl_integration import TimeXerModelB
+from src.models.timexl_integration import TimeXerFusionModel
 from src.utils.device import log_cuda_memory, log_torch_device, resolve_device
 from src.utils.mlflow_helpers import log_cfg_params
 from src.utils.seed import set_seed
@@ -51,8 +51,8 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             text_hidden=int(cfg.model.text_mlp.hidden),
             head_hidden=int(cfg.model.head.hidden),
         )
-    if name == "b":
-        return TimeXerModelB(
+    if name in {"b", "c0", "c1"}:
+        return TimeXerFusionModel(
             n_features=n_features,
             seq_len=int(cfg.data.lookback_T),
             horizon=int(cfg.data.horizon),
@@ -68,12 +68,13 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             text_dim=int(cfg.data.text.dim),
             text_hidden=int(cfg.model.text_mlp.hidden),
             head_hidden=int(cfg.model.head.hidden),
+            fusion=str(cfg.model.fusion),
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
             use_norm=bool(cfg.model.get("use_norm", False)),
             use_prototypes=bool(cfg.model.get("use_prototypes", True)),
         )
     raise NotImplementedError(
-        f"Model '{name}' not implemented yet (Phase 3+). Use model=a or model=b."
+        f"Model '{name}' not implemented. Use model=a, b, c0, or c1."
     )
 
 
@@ -227,6 +228,13 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
 
         test_metrics = evaluate(model, test_loader, device)
         log.info("Test — mse=%.4f mae=%.4f", test_metrics["mse"], test_metrics["mae"])
+        log.info(
+            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f",
+            cfg.model.name,
+            cfg.data.horizon,
+            test_metrics["mse"],
+            test_metrics["mae"],
+        )
         log.info(
             "H1_ROW model=%s horizon=%s mse=%.4f mae=%.4f",
             cfg.model.name,
