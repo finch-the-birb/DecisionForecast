@@ -140,6 +140,11 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 x = batch["x"].to(device)
                 y = batch["y"].to(device)
                 text = batch["text"].to(device)
+                if n_batches == 0:
+                    log.info(
+                        "First batch text L2 mean=%.4f (0 means empty/zero embeddings)",
+                        float(text.norm(dim=-1).mean()),
+                    )
                 optimizer.zero_grad(set_to_none=True)
                 if isinstance(model, TimeXLModelA):
                     out = model(x, text)
