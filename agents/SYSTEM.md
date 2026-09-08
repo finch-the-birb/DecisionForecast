@@ -48,7 +48,10 @@ TimeXL x TimeXer на FNSPID, абляции A / B / C0 / C1, метрики H1-
 - **C0**: TimeXer + прототипы + mid fusion **без** cross-attn (add/concat текста,
   НЕ через $G_en$).
 - **C1**: TimeXer + прототипы + mid fusion через канонический cross-attn TimeXer
-  ($G_en$ as bridge к exogenous/text tokens).
+  ($G_en$ as query к **единственному** exogenous token — text).
+- TimeXer: все каналы OHLCV — endogenous patches (M-style) + per-variate $G_en$.
+  Не inverted price-exo. B/C0: `exo=None`. C1: exo = text token `[B,1,D]`.
+  Head: mean-pool патчей target-канала (`close`).
 - Прототипы: **prototype-before-attn**, схема **G1+G2**:
   similarity/projection только по endogenous patch-токенам; $G_en$ не проецируется.
 - Residual injection: P <- P + W*S после PatchEmbed, затем стандартные слои TimeXer.
@@ -146,7 +149,7 @@ DecisionForecast/
 
 ### Фаза 3 - C0, C1 (Sprint 5-6)
 - C0: mid без attention (не $G_en$ для текста).
-- C1: exogenous variate tokens + cross-attn через $G_en$.
+- C1: text-only exo token + cross-attn через $G_en$ (OHLCV полностью endogenous).
 - DoD: таблица A/B/C0/C1 + Δ(A→B), Δ(B→C0), Δ(C0→C1).
 
 ### Фаза 4 - H3 Explanatory (Sprint 7)

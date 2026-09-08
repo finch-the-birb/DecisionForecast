@@ -1,5 +1,5 @@
 # Model C1 — TimeXer + prototypes + mid fusion via G_en cross-attn (Phase 3 / H2).
-# Text is an extra exogenous variate token; G_en is the bridge.
+# Text is the only exogenous token; OHLCV channels are all endogenous patches.
 name: c1
 variant: timexer_mid_cross_attn
 fusion: mid_cross_attn

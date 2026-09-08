@@ -3,10 +3,10 @@
 G1+G2: similarity / residual only on endogenous patch tokens; G_en is not
 projected. Injection is P <- P + W S after PatchEmbed, then TimeXer layers.
 
-Fusion (one factor at a time):
-- late (B): text concat at the prediction head
+Fusion (one factor at a time; OHLCV is always endogenous):
+- late (B): text concat at the prediction head; no G_en→text
 - mid_no_attn (C0): add projected text to patch tokens; G_en is not a text query
-- mid_cross_attn (C1): text as an extra exogenous variate token; G_en cross-attends
+- mid_cross_attn (C1): text is the only exogenous variate token; G_en cross-attends
 """
 
 from __future__ import annotations
@@ -91,10 +91,12 @@ class TimeXerFusionModel(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, text: torch.Tensor) -> ModelBOutput:
-        patches, g_en, exo, _stats = self.backbone.embed(x)
+        patches, g_en, _stats = self.backbone.embed(x)
+        batch, n_vars, n_patches, d_model = patches.shape
         if self.use_prototypes:
-            proto_mix, proto_losses = self.proto(patches)
-            patches = patches + self.inject(proto_mix)
+            flat = patches.reshape(batch, n_vars * n_patches, d_model)
+            proto_mix, proto_losses = self.proto(flat)
+            patches = patches + self.inject(proto_mix).view(batch, n_vars, n_patches, d_model)
         else:
             proto_losses = PrototypeLosses(
                 l_c=patches.new_zeros(()),
@@ -102,19 +104,21 @@ class TimeXerFusionModel(nn.Module):
                 l_d=patches.new_zeros(()),
             )
         text_tok = self.text_mlp(text)
+        exo = None
         if self.fusion == _MID_ADD:
-            patches = patches + text_tok.unsqueeze(1)
+            patches = patches + text_tok.view(batch, 1, 1, d_model)
         elif self.fusion == _MID_CROSS:
-            extra = text_tok.unsqueeze(1)
-            exo = extra if exo is None else torch.cat([exo, extra], dim=1)
+            exo = text_tok.unsqueeze(1)
         enc_patches, _enc_g = self.backbone.encode(patches, g_en, exo)
-        ts_repr = enc_patches.mean(dim=1)
+        target_patches = enc_patches[:, self.backbone.target_idx, :, :]
+        ts_repr = target_patches.mean(dim=1)
         if self.fusion == _LATE:
             fused = torch.cat([ts_repr, text_tok], dim=-1)
             pred = self.head(fused)
         else:
             pred = self.head(ts_repr)
-        return ModelBOutput(pred=pred, proto_losses=proto_losses, segments=patches)
+        segments = patches.reshape(batch, n_vars * n_patches, d_model)
+        return ModelBOutput(pred=pred, proto_losses=proto_losses, segments=segments)
 
     def compute_loss(
         self,

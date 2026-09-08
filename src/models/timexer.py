@@ -1,8 +1,8 @@
-"""TimeXer backbone (endogenous patches + G_en + optional exo cross-attn).
+"""TimeXer backbone: all OHLCV channels are endogenous patches + per-variate G_en.
 
-Adapted from thuml/Time-Series-Library models/TimeXer.py for univariate target
-(MS): the target channel is patched; other channels are inverted variate tokens.
-Text is not fused here — Model B does late fusion in timexl_integration.py.
+Exogenous tokens are *not* price channels. Text is attached by Model C1 only
+(G_en as query). Adapted from thuml/Time-Series-Library models/TimeXer.py
+(multivariate endogenous / M-style patching).
 """
 
 from __future__ import annotations
@@ -31,42 +31,35 @@ class PositionalEmbedding(nn.Module):
 
 
 class EndogenousPatchEmbed(nn.Module):
-    """Patch the target variate and append a learnable global token G_en."""
+    """Patch every endogenous channel and append a learnable G_en per channel."""
 
-    def __init__(self, d_model: int, patch_len: int, patch_stride: int, dropout: float) -> None:
+    def __init__(
+        self,
+        n_vars: int,
+        d_model: int,
+        patch_len: int,
+        patch_stride: int,
+        dropout: float,
+    ) -> None:
         super().__init__()
         self.patch_len = patch_len
         self.patch_stride = patch_stride
         self.value_embedding = nn.Linear(patch_len, d_model, bias=False)
-        self.glb_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.glb_token = nn.Parameter(torch.randn(1, n_vars, 1, d_model) * 0.02)
         self.position_embedding = PositionalEmbedding(d_model)
         self.dropout = nn.Dropout(dropout)
 
-    def n_patches(self, seq_len: int) -> int:
-        if seq_len < self.patch_len:
-            raise ValueError(f"seq_len={seq_len} < patch_len={self.patch_len}")
-        return (seq_len - self.patch_len) // self.patch_stride + 1
-
     def forward(self, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # y: [B, T] endogenous target
-        patches = y.unfold(dimension=-1, size=self.patch_len, step=self.patch_stride)
-        tokens = self.value_embedding(patches) + self.position_embedding(patches)
-        tokens = self.dropout(tokens)
-        g_en = self.glb_token.expand(y.size(0), -1, -1)
+        # y: [B, T, C] all endogenous
+        batch, _seq, n_vars = y.shape
+        series = y.permute(0, 2, 1)
+        patches = series.unfold(dimension=-1, size=self.patch_len, step=self.patch_stride)
+        _b, _c, n_patches, _p = patches.shape
+        flat = patches.reshape(batch * n_vars, n_patches, self.patch_len)
+        tokens = self.value_embedding(flat) + self.position_embedding(flat)
+        tokens = self.dropout(tokens).view(batch, n_vars, n_patches, -1)
+        g_en = self.glb_token.expand(batch, -1, -1, -1)
         return tokens, g_en
-
-
-class InvertedVariateEmbed(nn.Module):
-    """Map each exogenous channel (length T) to one variate token [B, C, D]."""
-
-    def __init__(self, seq_len: int, d_model: int, dropout: float) -> None:
-        super().__init__()
-        self.proj = nn.Linear(seq_len, d_model)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, T, C]
-        return self.dropout(self.proj(x.transpose(1, 2)))
 
 
 class _MHA(nn.Module):
@@ -82,7 +75,7 @@ class _MHA(nn.Module):
 
 
 class TimeXerEncoderLayer(nn.Module):
-    """Self-attn on [P; G_en], then G_en cross-attn to exogenous variate tokens."""
+    """Per-variate self-attn on [P; G_en]; G_en cross-attn to exo (text only in C1)."""
 
     def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float) -> None:
         super().__init__()
@@ -95,11 +88,18 @@ class TimeXerEncoderLayer(nn.Module):
         self.norm3 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, tokens: torch.Tensor, exo: torch.Tensor | None) -> torch.Tensor:
+    def forward(
+        self, tokens: torch.Tensor, exo: torch.Tensor | None, n_vars: int
+    ) -> torch.Tensor:
+        # tokens: [B * n_vars, S+1, D]; exo: [B, E, D] or None
         tokens = self.norm1(tokens + self.dropout(self.self_attn(tokens, tokens, tokens)))
         patches, g_en = tokens[:, :-1, :], tokens[:, -1:, :]
         if exo is not None and exo.numel() > 0 and exo.size(1) > 0:
-            g_en = self.norm2(g_en + self.dropout(self.cross_attn(g_en, exo, exo)))
+            batch = exo.size(0)
+            d_model = g_en.size(-1)
+            g = g_en.reshape(batch, n_vars, d_model)
+            g = g + self.dropout(self.cross_attn(g, exo, exo))
+            g_en = self.norm2(g.reshape(batch * n_vars, 1, d_model))
         else:
             g_en = self.norm2(g_en)
         y = torch.cat([patches, g_en], dim=1)
@@ -109,7 +109,7 @@ class TimeXerEncoderLayer(nn.Module):
 
 
 class TimeXerBackbone(nn.Module):
-    """PatchEmbed → (caller may inject prototypes) → TimeXer encoder."""
+    """Patch all OHLCV channels → optional proto injection (caller) → encoder."""
 
     def __init__(
         self,
@@ -132,13 +132,9 @@ class TimeXerBackbone(nn.Module):
         self.n_features = n_features
         self.target_idx = target_idx
         self.use_norm = use_norm
-        self.patch_embed = EndogenousPatchEmbed(d_model, patch_len, patch_stride, dropout)
-        n_exo = n_features - 1
-        self.exo_embed: InvertedVariateEmbed | None
-        if n_exo > 0:
-            self.exo_embed = InvertedVariateEmbed(seq_len, d_model, dropout)
-        else:
-            self.exo_embed = None
+        self.patch_embed = EndogenousPatchEmbed(
+            n_features, d_model, patch_len, patch_stride, dropout
+        )
         d_ff = d_ff or 4 * d_model
         self.layers = nn.ModuleList(
             [TimeXerEncoderLayer(d_model, n_heads, d_ff, dropout) for _ in range(e_layers)]
@@ -146,8 +142,8 @@ class TimeXerBackbone(nn.Module):
 
     def embed(
         self, x: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
-        # x: [B, T, C]
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        # x: [B, T, C] — all channels endogenous
         stats: dict[str, torch.Tensor] = {}
         if self.use_norm:
             means = x.mean(1, keepdim=True).detach()
@@ -155,18 +151,18 @@ class TimeXerBackbone(nn.Module):
             x = (x - means) / stdev
             stats["means"] = means
             stats["stdev"] = stdev
-        target = x[:, :, self.target_idx]
-        patches, g_en = self.patch_embed(target)
-        exo = None
-        if self.exo_embed is not None:
-            exo_idx = [i for i in range(self.n_features) if i != self.target_idx]
-            exo = self.exo_embed(x[:, :, exo_idx])
-        return patches, g_en, exo, stats
+        patches, g_en = self.patch_embed(x)
+        return patches, g_en, stats
 
     def encode(
         self, patches: torch.Tensor, g_en: torch.Tensor, exo: torch.Tensor | None
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        tokens = torch.cat([patches, g_en], dim=1)
+        # patches: [B, C, S, D], g_en: [B, C, 1, D], exo: [B, E, D] or None
+        batch, n_vars, n_patches, d_model = patches.shape
+        tokens = torch.cat([patches, g_en], dim=2).reshape(
+            batch * n_vars, n_patches + 1, d_model
+        )
         for layer in self.layers:
-            tokens = layer(tokens, exo)
-        return tokens[:, :-1, :], tokens[:, -1:, :]
+            tokens = layer(tokens, exo, n_vars=n_vars)
+        tokens = tokens.view(batch, n_vars, n_patches + 1, d_model)
+        return tokens[:, :, :-1, :], tokens[:, :, -1:, :]

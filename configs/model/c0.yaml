@@ -1,5 +1,5 @@
 # Model C0 — TimeXer + prototypes + mid fusion without cross-attn (Phase 3 / H2).
-# Text is added to patch tokens; G_en is not used as a query to text.
+# Text is added to endogenous OHLCV patch tokens; G_en is not a query to text.
 name: c0
 variant: timexer_mid_no_attn
 fusion: mid_no_attn

@@ -18,7 +18,8 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
 - Temporal split (no leakage): train ≤ 2021-12-31, val ≤ 2022-12-31, test > 2022-12-31.
 - Dev tickers: 15 liquid symbols in `data/fnspid.yaml`.
 - Text: frozen **finance** sentence embeddings (`FinLang/finance-embeddings-investopedia`, 768-d).
-  A/B: late fusion. C0: mid add to patches. C1: text as exo token via \(G_{en}\).
+  OHLCV is endogenous (all channels patched). Exogenous for C1 is **text only**.
+  A/B: late fusion. C0: mid add to patches (no \(G_{en}\)→text). C1: text as the sole exo token via \(G_{en}\).
 
 ## Hypotheses
 
