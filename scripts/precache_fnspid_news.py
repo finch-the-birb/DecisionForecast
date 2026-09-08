@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import logging
 
 from omegaconf import OmegaConf
 
-from src.data.dataset import TickerDataStore
+from src.data.dataset import precache_news_for_tickers
 from src.data.paths import resolve_data_root
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Cache FNSPID news per ticker.")
     parser.add_argument(
         "--config",
@@ -21,12 +23,11 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
-    root = resolve_data_root(cfg.root)
-    store = TickerDataStore(root, cfg.news_source, list(cfg.features), cfg.target)
+    root = resolve_data_root(str(cfg.root))
     tickers = list(cfg.tickers[args.ticker_set])
+    counts = precache_news_for_tickers(root, str(cfg.news_source), tickers)
     for ticker in tickers:
-        news = store.get_news(ticker)
-        print(f"{ticker}: {len(news)} news rows cached")
+        print(f"{ticker}: {counts.get(ticker, 0)} news rows cached")
 
 
 if __name__ == "__main__":

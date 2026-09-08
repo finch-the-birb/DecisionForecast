@@ -30,15 +30,18 @@ def save_projection_examples(
         x = batch["x"].to(device)
         text = batch["text"].to(device)
         out = model(x, text)
-        segment_bank.append(out.segments.reshape(-1, out.segments.size(-1)).cpu())
+        segs = out.segments
+        segment_bank.append(segs.reshape(-1, segs.size(-1)).cpu())
         for i in range(len(batch["ticker"])):
-            meta.append(
-                {
-                    "ticker": batch["ticker"][i],
-                    "end_date": batch["end_date"][i],
-                    "end_idx": int(batch["end_idx"][i]),
-                }
-            )
+            for seg_i in range(int(segs.size(1))):
+                meta.append(
+                    {
+                        "ticker": batch["ticker"][i],
+                        "end_date": batch["end_date"][i],
+                        "end_idx": int(batch["end_idx"][i]),
+                        "segment": seg_i,
+                    }
+                )
         if sum(t.size(0) for t in segment_bank) > 5000:
             break
 

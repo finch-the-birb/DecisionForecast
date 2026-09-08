@@ -79,6 +79,10 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         len(val_ds),
         len(test_ds),
     )
+    if min(len(train_ds), len(val_ds), len(test_ds)) == 0:
+        raise RuntimeError(
+            "Empty train/val/test split after capping; check tickers, dates, and max_*_windows"
+        )
 
     train_loader = DataLoader(
         train_ds,

@@ -1,0 +1,113 @@
+# FNSPID LTSF protocol — fixed temporal split, no leakage.
+name: fnspid
+
+# Resolve Data/ or data/ (legacy scripts use Data/FNSPID).
+root: ${oc.env:FNSPID_ROOT,Data/FNSPID}
+
+# Windowing (daily bars).
+lookback_T: 60
+patch_len: 12
+patch_stride: 6
+horizon: 7
+horizons: [7, 14, 30]
+
+features: [close, volume, open, high, low]
+target: close
+normalize: per_ticker_zscore
+
+split:
+  train_end: "2021-12-31"
+  val_end: "2022-12-31"
+
+tickers:
+  dev:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - FB
+    - NVDA
+    - TSLA
+    - JPM
+    - BAC
+    - WMT
+    - JNJ
+    - PG
+    - XOM
+    - DIS
+    - NFLX
+  paper:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - GOOG
+    - AMZN
+    - FB
+    - NVDA
+    - TSLA
+    - NFLX
+    - ADBE
+    - CSCO
+    - INTC
+    - CMCSA
+    - PEP
+    - COST
+    - AVGO
+    - TXN
+    - QCOM
+    - AMGN
+    - SBUX
+    - INTU
+    - AMD
+    - ISRG
+    - BKNG
+    - GILD
+    - ADP
+    - MDLZ
+    - PYPL
+    - MU
+    - AMAT
+    - JPM
+    - BAC
+    - WMT
+    - JNJ
+    - PG
+    - XOM
+    - DIS
+    - V
+    - MA
+    - UNH
+    - HD
+    - KO
+    - PFE
+    - MRK
+    - CVX
+    - ABBV
+    - TMO
+    - LLY
+    - WFC
+    - C
+    - GS
+    - CAT
+    - BA
+    - IBM
+    - GE
+    - NKE
+    - MCD
+    - CRM
+    - ORCL
+    - ACN
+    - T
+    - VZ
+    - UPS
+
+text:
+  enabled: true
+  encoder: sentence-transformers/all-MiniLM-L6-v2
+  summary_field: Lsa_summary
+  title_field: Article_title
+  cache_dir: ${data.root}/cache/embeddings
+  dim: 384
+  max_chars: 8000
+
+news_source: nasdaq_exteral_data

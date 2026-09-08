@@ -9,9 +9,10 @@ env/
 # Local research notes and paper drafts
 Articles/
 
-# Data (FNSPID and caches)
-Data/
-data/
+# Data (FNSPID and caches) — root only. Do not use a bare `data/` pattern:
+# that also ignores src/data/ and configs/data/.
+/Data/
+/data/
 
 # Database
 mlflow.db
