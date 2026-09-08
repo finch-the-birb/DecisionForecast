@@ -1,0 +1,25 @@
+# @package _global_
+# Forecasting article protocol: TimeXL × TimeXer on FNSPID (A/B/C0/C1, H1–H3).
+defaults:
+  - data: fnspid
+  - model: a
+  - train: default
+  - _self_
+
+experiment:
+  name: ${model.name}_H${data.horizon}
+  tags:
+    - forecasting
+    - fnspid
+    - ${model.name}
+
+paths:
+  output_dir: ${hydra:runtime.output_dir}
+  checkpoint_dir: ${paths.output_dir}/checkpoints
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}

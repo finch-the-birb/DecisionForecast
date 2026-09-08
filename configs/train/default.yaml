@@ -1,0 +1,24 @@
+seed: 42
+device: auto
+batch_size: 32
+epochs: 20
+lr: 0.001
+weight_decay: 0.0001
+num_workers: 0
+patience: 5
+eval_every: 1
+grad_clip: 1.0
+
+# Use dev tickers by default; override with data.tickers.paper for main runs.
+ticker_set: dev
+max_train_windows: null  # null = all; set small int for smoke tests
+max_val_windows: null
+max_test_windows: null
+
+mlflow:
+  enabled: true
+  tracking_uri: sqlite:///mlflow.db
+  experiment_name: decision-forecast
+  log_model: false
+
+metrics: [mse, mae]

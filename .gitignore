@@ -1,0 +1,61 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Cursor / IDE
+.cursor/
+
+# Local research notes and paper drafts
+Articles/
+
+# Data (FNSPID and caches)
+Data/
+data/
+
+# Database
+mlflow.db
+*.db
+
+# Jupyter notebooks
+notebooks/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ML artifacts and experiment outputs
+outputs/
+checkpoints/
+mlruns/
+*.pt
+*.pth
+*.ckpt
+
+# agent-handoff/: tracked on purpose during Dev↔Runner collab (markdown only).
+# Strip from history before paper/final archive:
+#   scripts/purge_agent_handoff_history.sh  |  .ps1
+# Do not place binaries, logs, or datasets under agent-handoff/.
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Obsidian (inside Articles if tracked elsewhere)
+.obsidian/
