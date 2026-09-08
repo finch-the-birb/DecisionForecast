@@ -9,18 +9,17 @@ from torch.utils.data import DataLoader
 
 from src.data.collate import forecast_collate
 from src.data.dataset import FNSPIDForecastDataset
-from src.models.timexl_a import TimeXLModelA
 
 
 @torch.no_grad()
 def save_projection_examples(
-    model: TimeXLModelA,
+    model: torch.nn.Module,
     dataset: FNSPIDForecastDataset,
     cfg: DictConfig,
     out_dir: Path,
     n_examples: int = 3,
 ) -> Path:
-    """Save nearest train segments for prototypes (Model A, H3 prep)."""
+    """Save nearest train segments for prototypes (H3 prep)."""
     model.eval()
     device = next(model.parameters()).device
     loader = DataLoader(dataset, batch_size=64, shuffle=False, collate_fn=forecast_collate)
@@ -59,6 +58,7 @@ def save_projection_examples(
             }
         )
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "projection_examples_a.json"
+    name = str(cfg.model.name)
+    path = out_dir / f"projection_examples_{name}.json"
     path.write_text(json.dumps(examples, indent=2), encoding="utf-8")
     return path

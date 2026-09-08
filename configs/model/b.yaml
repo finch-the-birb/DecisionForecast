@@ -1,4 +1,4 @@
-# Model B — TimeXer + prototypes + late fusion (Phase 2).
+# Model B — TimeXer + prototypes + late fusion (Phase 2 / H1).
 name: b
 variant: timexer_late
 fusion: late
@@ -8,7 +8,16 @@ n_prototypes: 10
 d_min: 0.5
 n_heads: 4
 e_layers: 2
+d_ff: 256
 dropout: 0.1
+use_norm: false
+use_prototypes: true
+
+text_mlp:
+  hidden: 64
+
+head:
+  hidden: 128
 
 loss:
   lambda_c: 0.1

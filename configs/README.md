@@ -23,7 +23,7 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
 
 ## Hypotheses
 
-- **H1:** A vs B (backbone effect at fixed late fusion).
+- **H1:** A vs B (backbone effect at fixed late fusion). Smoke: `model=a` then `model=b`.
 - **H2:** B vs C0 vs C1 (fusion ablation).
 - **H3:** Explanatory preservation (projection + faithfulness; Phase 4).
 
@@ -32,5 +32,6 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
 ```bash
 uv sync
 uv run python -m src.training.train --cfg job
-uv run python -m src.training.train model=a data.horizon=7 train.epochs=2
+uv run python -m src.training.train model=a train.device=cuda train.ticker_set=dev train.epochs=1
+uv run python -m src.training.train model=b train.device=cuda train.ticker_set=dev train.epochs=1
 ```

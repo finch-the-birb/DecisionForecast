@@ -2,5 +2,12 @@
 
 from src.models.prototypes import PrototypeLosses, PrototypeModule
 from src.models.timexl_a import TimeXLModelA
+from src.models.timexl_integration import ModelBOutput, TimeXerModelB
 
-__all__ = ["PrototypeLosses", "PrototypeModule", "TimeXLModelA"]
+__all__ = [
+    "ModelBOutput",
+    "PrototypeLosses",
+    "PrototypeModule",
+    "TimeXLModelA",
+    "TimeXerModelB",
+]
