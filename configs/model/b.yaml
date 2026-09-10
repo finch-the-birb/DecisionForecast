@@ -1,4 +1,6 @@
 # Model B — TimeXer + prototypes + late fusion (Phase 2 / H1).
+# OHLCV (close, volume, open, high, low) are multivariate PatchEmbed channels
+# for B/C0/C1 — not exogenous tokens. The exo slot is reserved for text in C1.
 name: b
 variant: timexer_late
 fusion: late

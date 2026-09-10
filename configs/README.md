@@ -10,6 +10,8 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
 | `model=b` | B | TimeXer | Late |
 | `model=c0` | C0 | TimeXer | Mid, no cross-attn |
 | `model=c1` | C1 | TimeXer | Mid + G_en cross-attn |
+| `model=timexer_plain` | — | TimeXer | none (sanity) |
+| `model=dlinear` | — | DLinear | none (sanity) |
 
 ## Fixed protocol
 
@@ -41,6 +43,10 @@ uv run python -m src.training.train --cfg job
 uv run python scripts/precache_text_embeddings.py --ticker-set=dev
 # lookback sensitivity (Model A)
 uv run python -m src.training.train -m data.lookback_T=36,60,96 model=a train.ticker_set=dev
+# Phase 2.1 sanity (no text in the model)
+for m in dlinear timexer_plain; do
+  uv run python -m src.training.train model=$m train.device=cuda train.ticker_set=dev train.epochs=10
+done
 # H2
 for m in a b c0 c1; do
   uv run python -m src.training.train model=$m train.device=cuda train.ticker_set=dev train.epochs=1

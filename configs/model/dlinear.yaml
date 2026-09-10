@@ -1,0 +1,9 @@
+# DLinear sanity control (Sprint 3). Not a hypothesis model.
+name: dlinear
+variant: dlinear
+kernel_size: 25
+
+loss:
+  lambda_c: 0.0
+  lambda_e: 0.0
+  lambda_d: 0.0

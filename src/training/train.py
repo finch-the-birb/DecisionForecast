@@ -14,6 +14,8 @@ from src.data.collate import forecast_collate
 from src.data.dataset import build_datasets, log_text_coverage
 from src.evaluation.metrics import compute_metrics
 from src.explain.h3 import write_h3_artifacts
+from src.models.dlinear import DLinear
+from src.models.timexer_plain import TimeXerPlain
 from src.models.timexl_a import TimeXLModelA
 from src.models.timexl_integration import TimeXerFusionModel
 from src.utils.device import log_cuda_memory, log_torch_device, resolve_device
@@ -51,6 +53,27 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             text_hidden=int(cfg.model.text_mlp.hidden),
             head_hidden=int(cfg.model.head.hidden),
         )
+    if name == "dlinear":
+        return DLinear(
+            seq_len=int(cfg.data.lookback_T),
+            horizon=int(cfg.data.horizon),
+            n_features=n_features,
+            target_idx=target_idx,
+            kernel_size=int(cfg.model.get("kernel_size", 25)),
+        )
+    if name == "timexer_plain":
+        return TimeXerPlain(
+            n_features=n_features,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_hidden=int(cfg.model.head.hidden),
+        )
     if name in {"b", "c0", "c1"}:
         return TimeXerFusionModel(
             n_features=n_features,
@@ -74,7 +97,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             use_prototypes=bool(cfg.model.get("use_prototypes", True)),
         )
     raise NotImplementedError(
-        f"Model '{name}' not implemented. Use model=a, b, c0, or c1."
+        f"Model '{name}' not implemented. Use model=a, b, c0, c1, timexer_plain, or dlinear."
     )
 
 
@@ -139,7 +162,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
 
     model = build_model(cfg).to(device)
     param_device = next(model.parameters()).device
-    log.info("Model parameters on %s", param_device)
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    log.info("Model parameters on %s n_params=%d", param_device, n_params)
     if device.type == "cuda" and param_device.type != "cuda":
         raise RuntimeError(f"Model parameters on {param_device}, expected {device}")
     log_cuda_memory("after model.to")
@@ -154,9 +178,10 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
 
     best_val = float("inf")
     patience_left = int(cfg.train.patience)
-    lambda_c = float(cfg.model.loss.lambda_c)
-    lambda_e = float(cfg.model.loss.lambda_e)
-    lambda_d = float(cfg.model.loss.lambda_d)
+    loss_cfg = cfg.model.get("loss", {})
+    lambda_c = float(loss_cfg.get("lambda_c", 0.0))
+    lambda_e = float(loss_cfg.get("lambda_e", 0.0))
+    lambda_d = float(loss_cfg.get("lambda_d", 0.0))
 
     mlflow_enabled = bool(cfg.train.mlflow.enabled)
     if mlflow_enabled:
@@ -167,6 +192,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         if mlflow_enabled:
             log_cfg_params(cfg)
             mlflow.log_param("device", str(device))
+            mlflow.log_param("n_params", n_params)
             if coverage:
                 mlflow.log_metrics({k: float(v) for k, v in coverage.items()})
 

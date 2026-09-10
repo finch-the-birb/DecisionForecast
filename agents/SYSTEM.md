@@ -143,7 +143,8 @@ DecisionForecast/
 - DoD: A обучается на dev subset; MSE/MAE; 2-3 примера projection.
 
 ### Фаза 2 - TimeXer + B (Sprint 3-4)
-- Sanity TimeXer без TimeXL; опционально DLinear/PatchTST.
+- src/models/timexer_backbone.py: multivariate PatchEmbed (all OHLCV) + one G_en.
+  Sanity: `model=dlinear`, `model=timexer_plain` (Sprint 3).
 - src/models/timexer.py + timexl_integration.py (G1+G2, late).
 - DoD: таблица A vs B (H1).
 
