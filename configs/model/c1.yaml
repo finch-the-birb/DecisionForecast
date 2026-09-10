@@ -1,8 +1,15 @@
 # Model C1 — TimeXer + prototypes + mid fusion via G_en cross-attn (Phase 3 / H2).
-# Text is the only exogenous token; OHLCV channels are all endogenous patches.
+# OHLCV are multivariate PatchEmbed channels. Text is the only exo (per_day tokens).
+# Cross-attn query is the single G_en; no text at the head.
 name: c1
 variant: timexer_mid_cross_attn
-fusion: mid_cross_attn
+
+fusion:
+  kind: mid_cross_attn
+  text_at_head: false
+  text_to_patches: false
+  text_as_exogenous: true
+  exo_tokens: per_day          # per_day | per_patch
 
 d_model: 64
 n_prototypes: 10
@@ -13,9 +20,6 @@ d_ff: 256
 dropout: 0.1
 use_norm: false
 use_prototypes: true
-
-text_mlp:
-  hidden: 64
 
 head:
   hidden: 128

@@ -74,3 +74,17 @@ def test_article_fallback_skip_vs_title() -> None:
     k1 = article_cache_key("", "Hello title", "2021-01-01")
     k2 = article_cache_key("", "Hello title", "2021-01-02")
     assert k1 != k2
+
+
+def test_first_day_lo_is_one_calendar_day() -> None:
+    dates = pd.date_range("2021-01-04", periods=3, freq="B")
+    mu = np.zeros(2, dtype=np.float32)
+    far = np.array(["2020-12-05T12:00:00"], dtype="datetime64[ns]")
+    e, has = build_daily_series(dates, far, np.array([[9.0, 9.0]], dtype=np.float32), mu, 0.03)
+    assert not has[0]
+    np.testing.assert_array_equal(e[0], np.zeros(2, dtype=np.float32))
+    near = np.array(["2021-01-03T12:00:00"], dtype="datetime64[ns]")
+    e2, has2 = build_daily_series(dates, near, np.array([[4.0, 0.0]], dtype=np.float32), mu, 0.03)
+    assert has2[0]
+    np.testing.assert_allclose(e2[0], np.array([4.0, 0.0], dtype=np.float32))
+

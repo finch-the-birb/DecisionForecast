@@ -14,7 +14,7 @@ from src.models.prototypes import PrototypeLosses
 class ModelOutput:
     pred: torch.Tensor
     proto_losses: PrototypeLosses | None
-    segments: torch.Tensor
+    segments: torch.Tensor  # pre-injection embeddings (proto similarity space)
 
 
 def compute_pred_loss(

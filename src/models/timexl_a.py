@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 from src.models.ablate import apply_feature_ablation
+from src.models.fusion import assert_fusion
 from src.models.prototypes import PrototypeLosses, PrototypeModule
 
 
@@ -68,8 +69,16 @@ class TimeXLModelA(nn.Module):
         text_dim: int,
         text_hidden: int,
         head_hidden: int,
+        fusion,
     ) -> None:
         super().__init__()
+        self.fusion = assert_fusion(
+            fusion,
+            kind="late",
+            text_at_head=True,
+            text_to_patches=False,
+            text_as_exogenous=False,
+        )
         self.horizon = horizon
         self.encoder = ConvSegmentEncoder(
             in_channels=n_features,
@@ -102,18 +111,19 @@ class TimeXLModelA(nn.Module):
         ablation_generator: torch.Generator | None = None,
     ) -> ModelAOutput:
         del text_seq
-        segments = self.encoder(x)
-        proto_mix, proto_losses = self.proto(segments)
+        bank = self.encoder(x)
+        proto_mix, proto_losses = self.proto(bank)
+        segments = bank
         if proto_mode != "zero":
             proto_mix = apply_feature_ablation(proto_mix, proto_mode, ablation_generator)
-            segments = segments + self.inject(proto_mix)
+            segments = bank + self.inject(proto_mix)
         ts_repr = segments.mean(dim=1)
         text_repr = apply_feature_ablation(
             self.text_mlp(text), text_mode, ablation_generator
         )
         fused = torch.cat([ts_repr, text_repr], dim=-1)
         pred = self.head(fused)
-        return ModelAOutput(pred=pred, proto_losses=proto_losses, segments=segments)
+        return ModelAOutput(pred=pred, proto_losses=proto_losses, segments=bank)
 
     def compute_loss(
         self,

@@ -1,4 +1,5 @@
 seed: 42
+# multi-seed: -m train.seed=0,1,2
 device: auto
 batch_size: 32
 epochs: 20
@@ -22,3 +23,8 @@ mlflow:
   log_model: false
 
 metrics: [mse, mae]
+
+proto:
+  init: kmeans          # kmeans | random
+  init_batches: 16
+  project_every: 0      # >0 — project prototypes onto nearest train segments every k epochs

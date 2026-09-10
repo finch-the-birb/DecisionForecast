@@ -1,6 +1,7 @@
 enabled: true
 n_projection: 3
+k_nearest: 3
 max_bank_segments: 5000
 # Path to best.pt for `python -m src.explain.run`. Unused by train (uses its own ckpt).
 checkpoint: null
-models: [a, b, c1]
+models: [a, b, c0, c1]

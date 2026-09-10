@@ -58,8 +58,9 @@ def build_daily_series(
     seen_news = False
     left = 0
     n_art = len(art_ns)
+    one_day_ns = np.int64(24 * 60 * 60 * 10**9)
     for i in range(n_days):
-        lo = day_ns[i - 1] if i > 0 else np.iinfo(np.int64).min
+        lo = day_ns[i - 1] if i > 0 else day_ns[0] - one_day_ns
         hi = day_ns[i]
         while left < n_art and art_ns[left] < lo:
             left += 1
@@ -119,8 +120,20 @@ def series_cache_dir(cache_root: Path, model_name: str) -> Path:
     return path
 
 
-def mu_path(cache_root: Path, model_name: str, ticker_set: str) -> Path:
-    return series_cache_dir(cache_root, model_name) / f"mu_{ticker_set}.npy"
+def mu_path(
+    cache_root: Path,
+    model_name: str,
+    ticker_set: str,
+    train_start: pd.Timestamp | str | None = None,
+    train_end: pd.Timestamp | str | None = None,
+) -> Path:
+    if train_start is not None and train_end is not None:
+        ts = pd.Timestamp(train_start).strftime("%Y-%m-%d")
+        te = pd.Timestamp(train_end).strftime("%Y-%m-%d")
+        name = f"mu_{ticker_set}_{ts}_{te}.npy"
+    else:
+        name = f"mu_{ticker_set}.npy"
+    return series_cache_dir(cache_root, model_name) / name
 
 
 def ticker_series_path(cache_root: Path, model_name: str, ticker: str) -> Path:
@@ -134,6 +147,7 @@ def compute_train_mu(
     train_end: pd.Timestamp,
     article_field: str,
     article_fallback: str,
+    train_start: pd.Timestamp | None = None,
 ) -> np.ndarray:
     chunks: list[np.ndarray] = []
     for ticker in tickers:
@@ -148,6 +162,8 @@ def compute_train_mu(
         dates = pd.to_datetime(news.iloc[np.flatnonzero(mask)]["Date"], utc=True, errors="coerce")
         dates = dates.dt.tz_convert(None).dt.normalize()
         keep = (dates <= train_end).to_numpy()
+        if train_start is not None:
+            keep = keep & (dates >= train_start).to_numpy()
         if keep.any():
             chunks.append(vecs[keep])
     if not chunks:

@@ -1,7 +1,7 @@
-"""Model C0: TimeXer + G1+G2 + per-patch text add (no cross-attn, no head text).
+"""Model C1: TimeXer + G1+G2 + G_en cross-attn to text exo tokens.
 
-Text enters once, after ``proto(P)``, via ``days_to_patches(text_seq)``. Encoder
-``exo=None``. ``G_en`` is not written by text. Head is ``Linear(d → H)``.
+Patches are not modified by text. Cross-attn query is the single G_en [B,1,d].
+Head has no text concat. Default exo_tokens=per_day.
 """
 
 from __future__ import annotations
@@ -12,13 +12,13 @@ import torch
 import torch.nn as nn
 
 from src.models.ablate import apply_feature_ablation
-from src.models.fusion import assert_fusion, fusion_map
+from src.models.fusion import assert_fusion
 from src.models.outputs import ModelOutput, compute_pred_loss
 from src.models.timexer_backbone import TimeXerBackbone, days_to_patches
 from src.models.timexl_integration import PrototypeResidual
 
 
-class TimeXerC0(nn.Module):
+class TimeXerC1(nn.Module):
     def __init__(
         self,
         n_features: int,
@@ -37,24 +37,15 @@ class TimeXerC0(nn.Module):
         d_ff: int | None = None,
     ) -> None:
         super().__init__()
-        flags = fusion_map(fusion)
-        if flags.get("text_align") == "pooled":
-            raise ValueError("pooled text-add is B, not C0")
-        layers = flags.get("inject_layers")
-        if list(layers) != [0]:
-            raise NotImplementedError(
-                f"C0 inject_layers={layers!r}; only [0] is implemented"
-            )
         self.fusion = assert_fusion(
             fusion,
-            kind="mid_no_attn",
+            kind="mid_cross_attn",
             text_at_head=False,
-            text_to_patches=True,
-            text_align="per_patch",
-            text_inject={"add", "concat_proj"},
-            text_as_exogenous=False,
+            text_to_patches=False,
+            text_as_exogenous=True,
+            exo_tokens={"per_day", "per_patch"},
         )
-        self.text_inject = str(self.fusion["text_inject"])
+        self.exo_tokens = str(self.fusion["exo_tokens"])
         self.backbone = TimeXerBackbone(
             n_features=n_features,
             d_model=d_model,
@@ -66,10 +57,7 @@ class TimeXerC0(nn.Module):
             d_ff=d_ff,
         )
         self.g12 = PrototypeResidual(n_prototypes, d_model, d_min)
-        self.w_t = nn.Linear(text_dim, d_model)
-        self.merge = (
-            nn.Linear(d_model * 2, d_model) if self.text_inject == "concat_proj" else None
-        )
+        self.exo_embed = nn.Linear(text_dim, d_model)
         self.head = nn.Sequential(
             nn.Linear(d_model, head_hidden),
             nn.ReLU(),
@@ -80,23 +68,6 @@ class TimeXerC0(nn.Module):
     def proto(self):
         return self.g12.proto
 
-    def _inject_text(
-        self,
-        patches: torch.Tensor,
-        text_seq: torch.Tensor,
-        text_mode: str,
-        ablation_generator: torch.Generator | None,
-    ) -> torch.Tensor:
-        embed = self.backbone.patch_embed
-        aligned = days_to_patches(text_seq, embed.patch_len, embed.patch_stride)
-        delta = apply_feature_ablation(
-            self.w_t(aligned), text_mode, ablation_generator
-        )
-        if self.text_inject == "add":
-            return patches + delta
-        assert self.merge is not None
-        return self.merge(torch.cat([patches, delta], dim=-1))
-
     def forward(
         self,
         x: torch.Tensor,
@@ -106,14 +77,22 @@ class TimeXerC0(nn.Module):
         text_mode: str = "none",
         ablation_generator: torch.Generator | None = None,
     ) -> ModelOutput:
-        del text  # C0 does not use pooled text / head concat
+        del text
         if text_seq is None:
-            raise ValueError("C0 requires text_seq [B,T,text_dim]")
+            raise ValueError("C1 requires text_seq [B,T,text_dim]")
         patches, g_en = self.backbone.embed(x)
         bank = patches
         patches, proto_losses = self.g12(patches, proto_mode, ablation_generator)
-        patches = self._inject_text(patches, text_seq, text_mode, ablation_generator)
-        enc_p, _g = self.backbone.encode(patches, g_en, exo=None)
+        embed = self.backbone.patch_embed
+        days = (
+            text_seq
+            if self.exo_tokens == "per_day"
+            else days_to_patches(text_seq, embed.patch_len, embed.patch_stride)
+        )
+        exo = apply_feature_ablation(
+            self.exo_embed(days), text_mode, ablation_generator
+        )
+        enc_p, _g = self.backbone.encode(patches, g_en, exo=exo)
         pred = self.head(enc_p.mean(dim=1))
         return ModelOutput(pred=pred, proto_losses=proto_losses, segments=bank)
 

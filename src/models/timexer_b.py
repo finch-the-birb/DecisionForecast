@@ -82,6 +82,7 @@ class TimeXerB(nn.Module):
     ) -> ModelOutput:
         del text_seq  # late fusion uses pooled ``text`` only
         patches, g_en = self.backbone.embed(x)
+        bank = patches
         patches, proto_losses = self.g12(patches, proto_mode, ablation_generator)
         enc_p, _g = self.backbone.encode(patches, g_en, exo=None)
         ts_repr = enc_p.mean(dim=1)
@@ -89,7 +90,7 @@ class TimeXerB(nn.Module):
             self.text_mlp(text), text_mode, ablation_generator
         )
         pred = self.head(torch.cat([ts_repr, text_repr], dim=-1))
-        return ModelOutput(pred=pred, proto_losses=proto_losses, segments=patches)
+        return ModelOutput(pred=pred, proto_losses=proto_losses, segments=bank)
 
     def compute_loss(
         self,

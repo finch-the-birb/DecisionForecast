@@ -132,17 +132,40 @@ def test_c0_head_has_no_text_concat() -> None:
     assert out.pred.shape == (3, 7)
 
 
-def test_zero_text_seq_b_and_c0_pred_shapes() -> None:
+def test_zero_text_seq_b_c0_c1_pred_shapes() -> None:
     b_m, c0_m = _make_b(), _make_c0()
-    b_m.eval()
-    c0_m.eval()
+    from src.models.timexer_c1 import TimeXerC1
+
+    c1_m = TimeXerC1(
+        n_features=5,
+        horizon=7,
+        d_model=32,
+        n_prototypes=4,
+        d_min=0.5,
+        n_heads=4,
+        e_layers=1,
+        patch_len=12,
+        patch_stride=6,
+        dropout=0.0,
+        text_dim=768,
+        head_hidden=16,
+        fusion={
+            "kind": "mid_cross_attn",
+            "text_at_head": False,
+            "text_to_patches": False,
+            "text_as_exogenous": True,
+            "exo_tokens": "per_day",
+        },
+        d_ff=64,
+    )
     x = torch.randn(2, 60, 5)
     text = torch.zeros(2, 768)
     text_seq = torch.zeros(2, 60, 768)
     with torch.no_grad():
         pb = b_m(x, text, text_seq=text_seq).pred
         pc = c0_m(x, text, text_seq=text_seq).pred
-    assert pb.shape == pc.shape == (2, 7)
+        p1 = c1_m(x, text, text_seq=text_seq).pred
+    assert pb.shape == pc.shape == p1.shape == (2, 7)
 
 
 def test_hydra_model_c0_nested_fusion() -> None:

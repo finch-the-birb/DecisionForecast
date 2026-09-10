@@ -67,6 +67,9 @@ TimeXL x TimeXer на FNSPID, абляции A / B / C0 / C1, метрики H1-
 - FNSPID: scripts/download_fnspid.py, scripts/load_fnspid.py (legacy, корень репо).
 - Новый код данных: src/data/ (см. структуру проекта ниже).
 - Dev: 10-20 тикеров для отладки пайплайна.
+- Split: `train_start` (2015-01-01) отсекает историю до нарезки окон;
+  train_end / val_end без изменений. Нормализация `per_window` (не глобальный z-score).
+  `mu` — train-статьи в `[train_start, train_end]`, файл `mu_{set}_{start}_{end}.npy`.
 - Основные эксперименты: **~50-100 тикеров**, 3-5 лет, фиксированный split
   (train/val/test по времени, без leakage).
 - Не обучать на полном FNSPID без явного запроса.
@@ -152,7 +155,7 @@ DecisionForecast/
 
 ### Фаза 3 - C0, C1 (Sprint 5-6)
 - C0: mid без attention (не $G_en$ для текста).
-- C1: text-only exo token + cross-attn через $G_en$ (OHLCV полностью endogenous).
+- C1: text-only exo (`per_day`) + cross-attn через один $G_en$ (`src/models/timexer_c1.py`).
 - DoD: таблица A/B/C0/C1 + Δ(A→B), Δ(B→C0), Δ(C0→C1).
 
 ### Фаза 4 - H3 Explanatory (Sprint 7)

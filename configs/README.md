@@ -17,7 +17,10 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
 
 - Task: LTSF regression (MSE/MAE), horizons `H ∈ {7, 14, 30}`.
 - Look-back `T=60`, patch `P=12`, stride `6`.
-- Temporal split (no leakage): train ≤ 2021-12-31, val ≤ 2022-12-31, test > 2022-12-31.
+- Temporal split (no leakage): prices `< train_start` (2015-01-01) dropped;
+  train last-target ≤ 2021-12-31, val ≤ 2022-12-31, test after.
+  Normalize: `per_window` (RevIN-style on each lookback; metrics in z-space + `mae_denorm`).
+  `mu_{ticker_set}_{train_start}_{train_end}.npy`.
 - Dev tickers: 15 liquid symbols in `configs/data/fnspid.yaml`.
 - Look-backs: core `lookback_T=60`; sensitivity grid `lookbacks: [36, 60, 96]`.
 - Text protocol (per article, then daily series — **not** concat+`max_chars`):
@@ -26,7 +29,7 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
   Daily `E[d]` = mean of articles in `[prev_trading_day, d)` minus train-only `mu`,
   else carry with `missing_policy=decay` (`λ=0.03`). Window pool: `recency_weighted`.
   OHLCV is endogenous (all channels patched). Exogenous for C1 is **text only**.
-  A/B: late fusion (B: pooled `text` at head, encoder `exo=None`). C0: per-patch add of `text_seq` after proto (no \(G_{en}\)→text, no head text). C1: text as the sole exo via \(G_{en}\) cross-attn.
+  A/B: late fusion (B: pooled `text` at head, encoder `exo=None`). C0: per-patch add of `text_seq` after proto (no \(G_{en}\)→text, no head text). C1: text as the sole exo via \(G_{en}\) cross-attn (`exo_tokens: per_day`). Not C2 (text in self-attn). Not C0' (C0+head text).
 
 ## Hypotheses
 

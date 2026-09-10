@@ -1,7 +1,12 @@
 # Model A — TimeXL baseline: 1D-CNN + prototypes + late fusion.
 name: a
 variant: timexl_cnn_late
-fusion: late
+
+fusion:
+  kind: late
+  text_at_head: true
+  text_to_patches: false
+  text_as_exogenous: false
 
 d_model: 64
 n_prototypes: 10

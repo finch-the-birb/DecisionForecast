@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 
+import mlflow
 import torch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
@@ -89,6 +90,12 @@ def save_faithfulness_ablation(
             f"{row['delta_mse']:+.4f}" if "delta_mse" in row else "n/a",
             f"{row['delta_mae']:+.4f}" if "delta_mae" in row else "n/a",
         )
+        if mlflow.active_run() is not None:
+            metrics_to_log = {f"h3_{key}_mse": row["mse"], f"h3_{key}_mae": row["mae"]}
+            if "delta_mse" in row:
+                metrics_to_log[f"h3_{key}_delta_mse"] = row["delta_mse"]
+                metrics_to_log[f"h3_{key}_delta_mae"] = row["delta_mae"]
+            mlflow.log_metrics(metrics_to_log)
 
     payload = {
         "model": str(cfg.model.name),
@@ -102,25 +109,51 @@ def save_faithfulness_ablation(
     return path
 
 
-def format_h3_table(reports: dict[str, dict]) -> str:
-    """Markdown H3 table. Pass decoded faithfulness JSON objects keyed by model id."""
-    order = [m for m in ("a", "b", "c1") if m in reports]
-    labels = {"a": "A", "b": "B", "c1": "C1"}
+def _mean_std(xs: list[float]) -> tuple[float, float, int]:
+    n = len(xs)
+    if n == 0:
+        return 0.0, 0.0, 0
+    mean = sum(xs) / n
+    if n == 1:
+        return mean, 0.0, 1
+    var = sum((x - mean) ** 2 for x in xs) / (n - 1)
+    return mean, var**0.5, n
+
+
+def _fmt_mean_std(xs: list[float], signed: bool = False) -> str:
+    mean, std, n = _mean_std(xs)
+    core = f"{mean:+.4f}" if signed else f"{mean:.4f}"
+    if n <= 1:
+        return core
+    return f"{core} ± {std:.4f} (n={n})"
+
+
+def _as_report_list(value: dict | list) -> list[dict]:
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def format_h3_table(reports: dict[str, dict | list[dict]]) -> str:
+    """Markdown H3 table. Values are one JSON object or a list (one per seed)."""
+    order = [m for m in ("a", "b", "c0", "c1") if m in reports]
+    labels = {"a": "A", "b": "B", "c0": "C0", "c1": "C1"}
     lines = [
         "| model | mse | proto_zero Δmse | proto_shuffle Δmse | text_zero Δmse | text_shuffle Δmse |",
         "|-------|-----|-----------------|--------------------|----------------|-------------------|",
     ]
     for key in order:
-        variants = reports[key]["variants"]
-        full_mse = variants["full"]["mse"]
+        reps = _as_report_list(reports[key])
+        full, pz, ps, tz, ts = [], [], [], [], []
+        for rep in reps:
+            variants = rep["variants"]
+            full.append(variants["full"]["mse"])
+            pz.append(variants["proto_zero"]["delta_mse"])
+            ps.append(variants["proto_shuffle"]["delta_mse"])
+            tz.append(variants["text_zero"]["delta_mse"])
+            ts.append(variants["text_shuffle"]["delta_mse"])
         lines.append(
-            "| {lab} | {mse:.4f} | {pz:+.4f} | {ps:+.4f} | {tz:+.4f} | {ts:+.4f} |".format(
-                lab=labels.get(key, key),
-                mse=full_mse,
-                pz=variants["proto_zero"]["delta_mse"],
-                ps=variants["proto_shuffle"]["delta_mse"],
-                tz=variants["text_zero"]["delta_mse"],
-                ts=variants["text_shuffle"]["delta_mse"],
-            )
+            f"| {labels.get(key, key)} | {_fmt_mean_std(full)} | {_fmt_mean_std(pz, True)} | "
+            f"{_fmt_mean_std(ps, True)} | {_fmt_mean_std(tz, True)} | {_fmt_mean_std(ts, True)} |"
         )
     return "\n".join(lines) + "\n"
