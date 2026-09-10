@@ -8,7 +8,7 @@ defaults:
   - _self_
 
 experiment:
-  name: ${model.name}_H${data.horizon}
+  name: ${model.name}_T${data.lookback_T}_H${data.horizon}
   tags:
     - forecasting
     - fnspid

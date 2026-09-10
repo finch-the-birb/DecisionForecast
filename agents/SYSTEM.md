@@ -55,8 +55,8 @@ TimeXL x TimeXer на FNSPID, абляции A / B / C0 / C1, метрики H1-
 - Прототипы: **prototype-before-attn**, схема **G1+G2**:
   similarity/projection только по endogenous patch-токенам; $G_en$ не проецируется.
 - Residual injection: P <- P + W*S после PatchEmbed, затем стандартные слои TimeXer.
-- Текст: **замороженный** sentence embedding (офлайн прекомпут), не joint fine-tune
-  большого LLM в core pipeline.
+- Текст: **замороженный** per-article embedding → дневная серия (train-mean `mu`,
+  missing-day decay) → pooled `text` `[dim]` и `text_seq` `[T, dim]`. Не concat окна.
 - Один фактор за раз в абляциях; общий temporal split, горизонты H, seed.
 - Шоковые дни / стратификация по vol - out of scope.
 
@@ -137,7 +137,7 @@ DecisionForecast/
 - DoD: Hydra config резолвится; протокол эксперимента описан в configs/.
 
 ### Фаза 1 - Data + Model A (Sprint 1-2)
-- src/data/: PyTorch Dataset, окна [B,T,C], target, text embedding на окно.
+- src/data/: PyTorch Dataset, окна [B,T,C], target, daily text series + pooled window.
 - src/models/timexl_a.py: 1D-CNN, prototype losses + L_pred, late fusion, projection.
 - src/training/train.py + MLflow.
 - DoD: A обучается на dev subset; MSE/MAE; 2-3 примера projection.

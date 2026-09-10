@@ -6,6 +6,7 @@ root: ${oc.env:FNSPID_ROOT,Data/FNSPID}
 
 # Windowing (daily bars).
 lookback_T: 60
+lookbacks: [36, 60, 96]  # sensitivity on M*; core uses lookback_T
 patch_len: 12
 patch_stride: 6
 horizon: 7
@@ -103,21 +104,21 @@ tickers:
 
 text:
   enabled: true
-  # Frozen encoder (SYSTEM.md): no joint LLM fine-tune.
-  # Default is a finance *embedding* model, not FinBERT (which is a 3-class sentiment head).
-  # Candidates / overrides:
-  #   FinLang/finance-embeddings-investopedia  768-d  ~110M  public ST (this default; CC-BY-NC-4.0)
-  #   FinLang/investopedia_embedding           gated 401 without HF_TOKEN — do not use
-  #   BatuhanECB/FinModernBERT-embed-large-v1  1024-d  ~395M  FinMTEB STS/Summ; set dim=1024 prefix="passage: "
-  #   sentence-transformers/all-MiniLM-L6-v2   384-d  general; set dim=384 prefix=""
-  #   FinanceMTEB/FinE5                        ~7B    skip in core pipeline (VRAM)
-  #   ProsusAI/finbert                         not an embedder — do not use here
+  # Frozen finance embedding model (not FinBERT). Public ST, no HF_TOKEN.
+  # Do not use gated FinLang/investopedia_embedding (401 without token).
   encoder: FinLang/finance-embeddings-investopedia
+  encoder_url: https://huggingface.co/FinLang/finance-embeddings-investopedia
   dim: 768
-  prefix: ""
-  summary_field: Lsa_summary
-  title_field: Article_title
-  cache_dir: ${data.root}/cache/embeddings
-  max_chars: 8000
+  max_seq_tokens: 512
+  encode_batch_size: 64
+  article_field: Lsa_summary
+  article_fallback: title          # skip | title  (article-level; not decay)
+  daily_agg: mean
+  missing_policy: decay            # zero | carry | decay  (day-level)
+  decay_lambda: 0.03               # FNSPID: S_t = 3 + (S_0 - 3) e^{-0.03 t}
+  neutral: train_mean              # zero | train_mean
+  window_agg: recency_weighted     # last | mean | recency_weighted
+  renormalize: false
+  cache_dir: ${data.root}/cache/text_series
 
 news_source: nasdaq_exteral_data

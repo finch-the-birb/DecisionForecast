@@ -12,6 +12,12 @@ from torch.utils.data import Dataset
 
 from src.data.embeddings import TextEmbeddingCache
 from src.data.paths import local_news_path, local_prices_dir, resolve_data_root
+from src.data.text_series import (
+    compute_train_mu,
+    load_or_build_daily_series,
+    mu_path,
+    pool_window,
+)
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +37,8 @@ class TickerSeries:
     features: np.ndarray
     target: np.ndarray
     dates: pd.Series
+    text_seq: np.ndarray | None = None
+    has_news: np.ndarray | None = None
 
 
 class TickerDataStore:
@@ -228,64 +236,30 @@ def _load_news_for_ticker(root: Path, ticker: str, source: str) -> pd.DataFrame:
     return _parse_news_dates(df)
 
 
-def _aggregate_window_text(
-    news: pd.DataFrame,
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-    title_field: str,
-    summary_field: str,
-    max_chars: int,
-) -> str:
-    if news.empty:
-        return ""
-    start_utc = pd.Timestamp(start)
-    end_utc = pd.Timestamp(end)
-    if start_utc.tzinfo is None:
-        start_utc = start_utc.tz_localize("UTC")
-    else:
-        start_utc = start_utc.tz_convert("UTC")
-    if end_utc.tzinfo is None:
-        end_utc = end_utc.tz_localize("UTC")
-    else:
-        end_utc = end_utc.tz_convert("UTC")
-    mask = (news["Date"] >= start_utc) & (news["Date"] < end_utc)
-    subset = news.loc[mask]
-    if subset.empty:
-        return ""
-    chunks: list[str] = []
-    for _, row in subset.iterrows():
-        title = str(row.get(title_field, "") or "").strip()
-        summary = str(row.get(summary_field, "") or "").strip()
-        piece = summary or title
-        if piece:
-            chunks.append(piece)
-    return " ".join(chunks)[:max_chars]
-
-
 class FNSPIDForecastDataset(Dataset):
-    """Sliding-window LTSF samples; text aggregated lazily per __getitem__."""
+    """Sliding-window LTSF samples with pooled and sequential text from daily series."""
 
     def __init__(
         self,
         indices: list[WindowIndex],
         store: TickerDataStore,
         series: dict[str, TickerSeries],
-        text_cache: TextEmbeddingCache | None,
         horizon: int,
-        title_field: str,
-        summary_field: str,
-        max_chars: int,
+        text_dim: int,
         text_enabled: bool = True,
+        window_agg: str = "recency_weighted",
+        decay_lambda: float = 0.03,
+        renormalize: bool = False,
     ) -> None:
         self.indices = indices
         self.store = store
         self.series = series
-        self.text_cache = text_cache
         self.horizon = horizon
-        self.title_field = title_field
-        self.summary_field = summary_field
-        self.max_chars = max_chars
+        self.text_dim = text_dim
         self.text_enabled = text_enabled
+        self.window_agg = window_agg
+        self.decay_lambda = decay_lambda
+        self.renormalize = renormalize
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -295,32 +269,34 @@ class FNSPIDForecastDataset(Dataset):
         ts = self.series[wi.ticker]
         x = ts.features[wi.start_idx : wi.end_idx]
         y = ts.target[wi.end_idx : wi.end_idx + self.horizon]
-        text_str = ""
-        if self.text_enabled and self.text_cache is not None:
-            news = self.store.get_news(wi.ticker)
-            start_date = ts.dates.iloc[wi.start_idx]
-            end_date = ts.dates.iloc[wi.end_idx]
-            text_str = _aggregate_window_text(
-                news,
-                start_date,
-                end_date,
-                self.title_field,
-                self.summary_field,
-                self.max_chars,
+        t_len = wi.end_idx - wi.start_idx
+        if self.text_enabled and ts.text_seq is not None:
+            text_seq = ts.text_seq[wi.start_idx : wi.end_idx]
+            text = pool_window(
+                ts.text_seq,
+                wi.start_idx,
+                wi.end_idx,
+                self.window_agg,
+                self.decay_lambda,
+                renormalize=self.renormalize,
             )
-            text = self.text_cache.encode(wi.ticker, wi.end_date, text_str)
-            text_t = torch.from_numpy(text)
+            if ts.has_news is not None:
+                has_news_frac = float(ts.has_news[wi.start_idx : wi.end_idx].mean())
+            else:
+                has_news_frac = 0.0
         else:
-            dim = self.text_cache.dim if self.text_cache else 384
-            text_t = torch.zeros(dim, dtype=torch.float32)
+            text_seq = np.zeros((t_len, self.text_dim), dtype=np.float32)
+            text = np.zeros(self.text_dim, dtype=np.float32)
+            has_news_frac = 0.0
         return {
             "x": torch.from_numpy(x.copy()),
             "y": torch.from_numpy(y.copy()),
-            "text": text_t,
+            "text": torch.from_numpy(np.asarray(text, dtype=np.float32)),
+            "text_seq": torch.from_numpy(np.asarray(text_seq, dtype=np.float32).copy()),
+            "has_news_frac": torch.tensor(has_news_frac, dtype=torch.float32),
             "ticker": wi.ticker,
             "end_idx": wi.end_idx,
             "end_date": wi.end_date,
-            "raw_text": text_str,
         }
 
 
@@ -373,6 +349,140 @@ def _log_split(name: str, ds: FNSPIDForecastDataset) -> None:
     )
 
 
+def _validate_lookback(lookback: int, patch_len: int, patch_stride: int) -> None:
+    if lookback < patch_len:
+        raise ValueError(f"lookback_T={lookback} < patch_len={patch_len}")
+    rem = (lookback - patch_len) % patch_stride
+    if rem != 0:
+        log.warning(
+            "lookback_T=%s patch_len=%s stride=%s leaves remainder %s",
+            lookback,
+            patch_len,
+            patch_stride,
+            rem,
+        )
+
+
+def log_text_coverage(
+    splits: dict[str, FNSPIDForecastDataset],
+    series: dict[str, TickerSeries],
+) -> dict[str, float]:
+    """Log per-split / per-ticker news coverage. Returns flat metrics for MLflow."""
+    metrics: dict[str, float] = {}
+    for ticker, ts in series.items():
+        if ts.has_news is None or len(ts.has_news) == 0:
+            frac = 0.0
+        else:
+            frac = float(np.asarray(ts.has_news).mean())
+        metrics[f"text_coverage_ticker_{ticker}"] = frac
+        log.info("TEXT_COVERAGE ticker=%s days_with_news=%.3f", ticker, frac)
+    for split_name, ds in splits.items():
+        if len(ds) == 0:
+            log.info("TEXT_COVERAGE split=%s windows=0", split_name)
+            continue
+        fracs: list[float] = []
+        norms: list[float] = []
+        for i in range(len(ds)):
+            item = ds[i]
+            fracs.append(float(item["has_news_frac"]))
+            norms.append(float(torch.linalg.vector_norm(item["text"]).item()))
+        arr = np.asarray(fracs, dtype=np.float64)
+        zero_frac = float((arr == 0.0).mean())
+        mean_frac = float(arr.mean())
+        mean_norm = float(np.mean(norms)) if norms else 0.0
+        metrics[f"text_coverage_{split_name}_news_frac"] = mean_frac
+        metrics[f"text_coverage_{split_name}_zero_windows"] = zero_frac
+        metrics[f"text_coverage_{split_name}_mean_text_l2"] = mean_norm
+        log.info(
+            "TEXT_COVERAGE split=%s windows=%d mean_has_news_frac=%.3f "
+            "zero_windows=%.3f mean_text_l2=%.4f",
+            split_name,
+            len(ds),
+            mean_frac,
+            zero_frac,
+            mean_norm,
+        )
+    return metrics
+
+
+def _attach_text_series(
+    cfg: DictConfig,
+    store: TickerDataStore,
+    series: dict[str, TickerSeries],
+    tickers: list[str],
+    train_end: pd.Timestamp,
+    device: str | torch.device | None,
+) -> None:
+    text_cfg = cfg.data.text
+    dim = int(text_cfg.dim)
+    cache_root = Path(text_cfg.cache_dir)
+    model_name = str(text_cfg.encoder)
+    article_field = str(text_cfg.article_field)
+    article_fallback = str(text_cfg.article_fallback)
+    lam = float(text_cfg.decay_lambda)
+    missing_policy = str(text_cfg.missing_policy)
+    ticker_set = str(cfg.train.ticker_set)
+    daily_agg = str(text_cfg.get("daily_agg", "mean"))
+    if daily_agg != "mean":
+        raise ValueError(f"daily_agg={daily_agg!r}; only mean is implemented")
+    cache = TextEmbeddingCache(
+        cache_dir=cache_root,
+        model_name=model_name,
+        dim=dim,
+        encode_batch_size=int(text_cfg.get("encode_batch_size", 64)),
+        max_seq_tokens=int(text_cfg.get("max_seq_tokens", 512)),
+        device=device,
+        prefix=str(text_cfg.get("prefix", "") or ""),
+    )
+    news_by_ticker = {ticker: store.get_news(ticker) for ticker in series}
+    mu_file = mu_path(cache_root, model_name, ticker_set)
+    if str(text_cfg.get("neutral", "train_mean")) == "zero":
+        mu = np.zeros(dim, dtype=np.float32)
+    elif mu_file.exists():
+        mu = np.load(mu_file).astype(np.float32).reshape(-1)
+        if mu.shape[0] != dim:
+            log.warning("mu dim %s != cfg dim %s; recomputing", mu.shape[0], dim)
+            mu = compute_train_mu(
+                list(series.keys()),
+                news_by_ticker,
+                cache,
+                train_end,
+                article_field,
+                article_fallback,
+            )
+            np.save(mu_file, mu)
+    else:
+        mu = compute_train_mu(
+            list(series.keys()),
+            news_by_ticker,
+            cache,
+            train_end,
+            article_field,
+            article_fallback,
+        )
+        mu_file.parent.mkdir(parents=True, exist_ok=True)
+        np.save(mu_file, mu)
+    log.info("Text mu ticker_set=%s L2=%.4f dim=%d", ticker_set, float(np.linalg.norm(mu)), mu.size)
+    for ticker, ts in series.items():
+        e, has_news = load_or_build_daily_series(
+            ticker=ticker,
+            trading_dates=ts.dates,
+            news=news_by_ticker[ticker],
+            cache=cache,
+            mu=mu,
+            cache_root=cache_root,
+            model_name=model_name,
+            article_field=article_field,
+            article_fallback=article_fallback,
+            lam=lam,
+            missing_policy=missing_policy,
+        )
+        if e.shape[-1] != dim:
+            raise ValueError(f"{ticker}: text dim {e.shape[-1]} != cfg {dim}")
+        ts.text_seq = e
+        ts.has_news = has_news
+
+
 def build_datasets(
     cfg: DictConfig, device: str | torch.device | None = None
 ) -> tuple[FNSPIDForecastDataset, ...]:
@@ -385,6 +495,8 @@ def build_datasets(
     train_end = _as_naive_day(cfg.data.split.train_end)
     val_end = _as_naive_day(cfg.data.split.val_end)
     text_enabled = bool(cfg.data.text.get("enabled", True))
+    text_dim = int(cfg.data.text.dim)
+    _validate_lookback(lookback, int(cfg.data.patch_len), int(cfg.data.patch_stride))
 
     store = TickerDataStore(root, str(cfg.data.news_source), features, target_col)
     series: dict[str, TickerSeries] = {}
@@ -396,18 +508,8 @@ def build_datasets(
     if not series:
         raise RuntimeError(f"No price series loaded from {store.prices_dir} for {tickers}")
 
-    text_cache = (
-        TextEmbeddingCache(
-            cache_dir=Path(cfg.data.text.cache_dir),
-            model_name=str(cfg.data.text.encoder),
-            dim=int(cfg.data.text.dim),
-            max_chars=int(cfg.data.text.max_chars),
-            device=device,
-            prefix=str(cfg.data.text.get("prefix", "") or ""),
-        )
-        if text_enabled
-        else None
-    )
+    if text_enabled:
+        _attach_text_series(cfg, store, series, tickers, train_end, device)
 
     train_idx: list[WindowIndex] = []
     val_idx: list[WindowIndex] = []
@@ -439,12 +541,12 @@ def build_datasets(
     common = dict(
         store=store,
         series=series,
-        text_cache=text_cache,
         horizon=horizon,
-        title_field=str(cfg.data.text.title_field),
-        summary_field=str(cfg.data.text.summary_field),
-        max_chars=int(cfg.data.text.max_chars),
+        text_dim=text_dim,
         text_enabled=text_enabled,
+        window_agg=str(cfg.data.text.get("window_agg", "recency_weighted")),
+        decay_lambda=float(cfg.data.text.get("decay_lambda", 0.03)),
+        renormalize=bool(cfg.data.text.get("renormalize", False)),
     )
     train_ds = FNSPIDForecastDataset(_cap(train_idx, cfg.train.max_train_windows), **common)
     val_ds = FNSPIDForecastDataset(_cap(val_idx, cfg.train.max_val_windows), **common)

@@ -11,7 +11,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
 from src.data.collate import forecast_collate
-from src.data.dataset import build_datasets
+from src.data.dataset import build_datasets, log_text_coverage
 from src.evaluation.metrics import compute_metrics
 from src.explain.h3 import write_h3_artifacts
 from src.models.timexl_a import TimeXLModelA
@@ -106,6 +106,10 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         len(val_ds),
         len(test_ds),
     )
+    coverage = log_text_coverage(
+        {"train": train_ds, "val": val_ds, "test": test_ds},
+        train_ds.series,
+    )
     if min(len(train_ds), len(val_ds), len(test_ds)) == 0:
         raise RuntimeError(
             "Empty train/val/test split after capping; check tickers, dates, and max_*_windows"
@@ -163,6 +167,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         if mlflow_enabled:
             log_cfg_params(cfg)
             mlflow.log_param("device", str(device))
+            if coverage:
+                mlflow.log_metrics({k: float(v) for k, v in coverage.items()})
 
         for epoch in range(1, int(cfg.train.epochs) + 1):
             model.train()
@@ -176,6 +182,12 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     log.info(
                         "First batch text L2 mean=%.4f (0 means empty/zero embeddings)",
                         float(text.norm(dim=-1).mean()),
+                    )
+                    log.info(
+                        "First batch shapes x=%s text=%s text_seq=%s",
+                        tuple(x.shape),
+                        tuple(text.shape),
+                        tuple(batch["text_seq"].shape),
                     )
                     log.info("First batch tensors on x=%s text=%s", x.device, text.device)
                     log_cuda_memory("first train batch")
