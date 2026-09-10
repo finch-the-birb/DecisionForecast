@@ -1,8 +1,17 @@
 # Model C0 — TimeXer + prototypes + mid fusion without cross-attn (Phase 3 / H2).
-# Text is added to endogenous OHLCV patch tokens; G_en is not a query to text.
+# OHLCV are multivariate PatchEmbed channels (same as B). Text enters once as
+# per-patch add after proto(P); encoder exo=None; no text at the head.
 name: c0
 variant: timexer_mid_no_attn
-fusion: mid_no_attn
+
+fusion:
+  kind: mid_no_attn
+  text_at_head: false
+  text_to_patches: true
+  text_align: per_patch
+  text_inject: add
+  inject_layers: [0]
+  text_as_exogenous: false
 
 d_model: 64
 n_prototypes: 10
@@ -13,9 +22,6 @@ d_ff: 256
 dropout: 0.1
 use_norm: false
 use_prototypes: true
-
-text_mlp:
-  hidden: 64
 
 head:
   hidden: 128

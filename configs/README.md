@@ -26,7 +26,7 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
   Daily `E[d]` = mean of articles in `[prev_trading_day, d)` minus train-only `mu`,
   else carry with `missing_policy=decay` (`λ=0.03`). Window pool: `recency_weighted`.
   OHLCV is endogenous (all channels patched). Exogenous for C1 is **text only**.
-  A/B: late fusion (B: pooled `text` at head, encoder `exo=None`). C0: mid add to patches (no \(G_{en}\)→text). C1: text as the sole exo via \(G_{en}\) cross-attn.
+  A/B: late fusion (B: pooled `text` at head, encoder `exo=None`). C0: per-patch add of `text_seq` after proto (no \(G_{en}\)→text, no head text). C1: text as the sole exo via \(G_{en}\) cross-attn.
 
 ## Hypotheses
 
@@ -51,6 +51,8 @@ done
 for m in a b c0 c1; do
   uv run python -m src.training.train model=$m train.device=cuda train.ticker_set=dev train.epochs=1
 done
+# H2 table from MLflow (after A/B/C0/C1 runs)
+uv run python -m src.evaluation.ablation_table --out-dir outputs/tables
 # H3 (train writes explain/projection + faithfulness for a/b/c1)
 for m in a b c1; do
   uv run python -m src.training.train model=$m train.device=cuda train.ticker_set=dev train.epochs=1

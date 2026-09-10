@@ -17,6 +17,7 @@ from src.explain.h3 import write_h3_artifacts
 from src.models.dlinear import DLinear
 from src.models.fusion import loggable_fusion
 from src.models.timexer_b import TimeXerB
+from src.models.timexer_c0 import TimeXerC0
 from src.models.timexer_plain import TimeXerPlain
 from src.models.timexl_a import TimeXLModelA
 from src.models.timexl_integration import TimeXerFusionModel
@@ -94,7 +95,24 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             fusion=cfg.model.fusion,
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
         )
-    if name in {"c0", "c1"}:
+    if name == "c0":
+        return TimeXerC0(
+            n_features=n_features,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_prototypes=int(cfg.model.n_prototypes),
+            d_min=float(cfg.model.d_min),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=int(cfg.data.text.dim),
+            head_hidden=int(cfg.model.head.hidden),
+            fusion=cfg.model.fusion,
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+        )
+    if name == "c1":
         return TimeXerFusionModel(
             n_features=n_features,
             seq_len=int(cfg.data.lookback_T),

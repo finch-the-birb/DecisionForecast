@@ -94,9 +94,11 @@ def test_b_g_en_not_in_segments_bank() -> None:
 
 
 def test_hydra_model_b_nested_fusion() -> None:
+    from hydra.core.global_hydra import GlobalHydra
     from hydra import compose, initialize_config_dir
     from pathlib import Path
 
+    GlobalHydra.instance().clear()
     cfg_dir = str(Path(__file__).resolve().parents[1] / "configs")
     with initialize_config_dir(version_base=None, config_dir=cfg_dir):
         cfg = compose(config_name="config", overrides=["model=b"])
