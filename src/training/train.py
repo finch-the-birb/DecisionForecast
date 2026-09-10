@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -10,10 +11,12 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
 from src.data.collate import forecast_collate
-from src.data.dataset import build_datasets
+from src.data.dataset import build_datasets, log_text_coverage
 from src.evaluation.metrics import compute_metrics
-from src.explain.projection import save_projection_examples
+from src.explain.h3 import write_h3_artifacts
 from src.models.timexl_a import TimeXLModelA
+from src.models.timexl_integration import TimeXerFusionModel
+from src.utils.device import log_cuda_memory, log_torch_device, resolve_device
 from src.utils.mlflow_helpers import log_cfg_params
 from src.utils.seed import set_seed
 
@@ -21,30 +24,57 @@ log = logging.getLogger(__name__)
 
 
 def _resolve_device(device_cfg: str) -> torch.device:
-    if device_cfg == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(device_cfg)
+    return resolve_device(device_cfg)
 
 
 def build_model(cfg: DictConfig) -> torch.nn.Module:
-    if cfg.model.name != "a":
-        raise NotImplementedError(
-            f"Model '{cfg.model.name}' not implemented yet (Phase 2+). Use model=a."
-        )
     n_features = len(cfg.data.features)
-    return TimeXLModelA(
-        n_features=n_features,
-        horizon=int(cfg.data.horizon),
-        d_model=int(cfg.model.d_model),
-        n_prototypes=int(cfg.model.n_prototypes),
-        d_min=float(cfg.model.d_min),
-        patch_len=int(cfg.data.patch_len),
-        patch_stride=int(cfg.data.patch_stride),
-        cnn_channels=list(cfg.model.cnn.channels),
-        cnn_kernel=int(cfg.model.cnn.kernel_size),
-        text_dim=int(cfg.data.text.dim),
-        text_hidden=int(cfg.model.text_mlp.hidden),
-        head_hidden=int(cfg.model.head.hidden),
+    features = [str(f) for f in cfg.data.features]
+    target = str(cfg.data.target)
+    try:
+        target_idx = features.index(target)
+    except ValueError as exc:
+        raise ValueError(f"target {target!r} not in features {features}") from exc
+    name = str(cfg.model.name)
+    if name == "a":
+        return TimeXLModelA(
+            n_features=n_features,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_prototypes=int(cfg.model.n_prototypes),
+            d_min=float(cfg.model.d_min),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            cnn_channels=list(cfg.model.cnn.channels),
+            cnn_kernel=int(cfg.model.cnn.kernel_size),
+            text_dim=int(cfg.data.text.dim),
+            text_hidden=int(cfg.model.text_mlp.hidden),
+            head_hidden=int(cfg.model.head.hidden),
+        )
+    if name in {"b", "c0", "c1"}:
+        return TimeXerFusionModel(
+            n_features=n_features,
+            seq_len=int(cfg.data.lookback_T),
+            horizon=int(cfg.data.horizon),
+            target_idx=target_idx,
+            d_model=int(cfg.model.d_model),
+            n_prototypes=int(cfg.model.n_prototypes),
+            d_min=float(cfg.model.d_min),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=int(cfg.data.text.dim),
+            text_hidden=int(cfg.model.text_mlp.hidden),
+            head_hidden=int(cfg.model.head.hidden),
+            fusion=str(cfg.model.fusion),
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            use_norm=bool(cfg.model.get("use_norm", False)),
+            use_prototypes=bool(cfg.model.get("use_prototypes", True)),
+        )
+    raise NotImplementedError(
+        f"Model '{name}' not implemented. Use model=a, b, c0, or c1."
     )
 
 
@@ -57,11 +87,8 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
         x = batch["x"].to(device)
         y = batch["y"].to(device)
         text = batch["text"].to(device)
-        if isinstance(model, TimeXLModelA):
-            out = model(x, text)
-            pred = out.pred
-        else:
-            pred = model(x, text)
+        out = model(x, text)
+        pred = out.pred if hasattr(out, "pred") else out
         preds.append(pred.cpu())
         targets.append(y.cpu())
     return compute_metrics(torch.cat(preds), torch.cat(targets))
@@ -70,15 +97,23 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
 def run_training(cfg: DictConfig) -> dict[str, float]:
     set_seed(int(cfg.train.seed))
     device = _resolve_device(str(cfg.train.device))
-    log.info("Device: %s", device)
+    log_torch_device(device, role="train")
 
-    train_ds, val_ds, test_ds = build_datasets(cfg)
+    train_ds, val_ds, test_ds = build_datasets(cfg, device=device)
     log.info(
         "Dataset sizes — train: %d, val: %d, test: %d",
         len(train_ds),
         len(val_ds),
         len(test_ds),
     )
+    coverage = log_text_coverage(
+        {"train": train_ds, "val": val_ds, "test": test_ds},
+        train_ds.series,
+    )
+    if min(len(train_ds), len(val_ds), len(test_ds)) == 0:
+        raise RuntimeError(
+            "Empty train/val/test split after capping; check tickers, dates, and max_*_windows"
+        )
 
     train_loader = DataLoader(
         train_ds,
@@ -103,6 +138,11 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
     )
 
     model = build_model(cfg).to(device)
+    param_device = next(model.parameters()).device
+    log.info("Model parameters on %s", param_device)
+    if device.type == "cuda" and param_device.type != "cuda":
+        raise RuntimeError(f"Model parameters on {param_device}, expected {device}")
+    log_cuda_memory("after model.to")
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(cfg.train.lr),
@@ -127,6 +167,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         if mlflow_enabled:
             log_cfg_params(cfg)
             mlflow.log_param("device", str(device))
+            if coverage:
+                mlflow.log_metrics({k: float(v) for k, v in coverage.items()})
 
         for epoch in range(1, int(cfg.train.epochs) + 1):
             model.train()
@@ -136,14 +178,26 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 x = batch["x"].to(device)
                 y = batch["y"].to(device)
                 text = batch["text"].to(device)
-                optimizer.zero_grad(set_to_none=True)
-                if isinstance(model, TimeXLModelA):
-                    out = model(x, text)
-                    loss, train_metrics = model.compute_loss(
-                        out, y, lambda_c, lambda_e, lambda_d
+                if n_batches == 0:
+                    log.info(
+                        "First batch text L2 mean=%.4f (0 means empty/zero embeddings)",
+                        float(text.norm(dim=-1).mean()),
                     )
-                else:
-                    raise NotImplementedError
+                    log.info(
+                        "First batch shapes x=%s text=%s text_seq=%s",
+                        tuple(x.shape),
+                        tuple(text.shape),
+                        tuple(batch["text_seq"].shape),
+                    )
+                    log.info("First batch tensors on x=%s text=%s", x.device, text.device)
+                    log_cuda_memory("first train batch")
+                optimizer.zero_grad(set_to_none=True)
+                out = model(x, text)
+                if not hasattr(model, "compute_loss"):
+                    raise NotImplementedError(f"{type(model).__name__} has no compute_loss")
+                loss, train_metrics = model.compute_loss(
+                    out, y, lambda_c, lambda_e, lambda_d
+                )
                 loss.backward()
                 if cfg.train.grad_clip:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg.train.grad_clip))
@@ -186,22 +240,49 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
 
         test_metrics = evaluate(model, test_loader, device)
         log.info("Test — mse=%.4f mae=%.4f", test_metrics["mse"], test_metrics["mae"])
+        log.info(
+            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f",
+            cfg.model.name,
+            cfg.data.horizon,
+            test_metrics["mse"],
+            test_metrics["mae"],
+        )
+        log.info(
+            "H1_ROW model=%s horizon=%s mse=%.4f mae=%.4f",
+            cfg.model.name,
+            cfg.data.horizon,
+            test_metrics["mse"],
+            test_metrics["mae"],
+        )
+        metrics_path = Path(cfg.paths.output_dir) / "metrics.json"
+        metrics_path.write_text(
+            json.dumps(
+                {
+                    "model": str(cfg.model.name),
+                    "horizon": int(cfg.data.horizon),
+                    "mse": test_metrics["mse"],
+                    "mae": test_metrics["mae"],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         if mlflow_enabled:
             mlflow.log_metrics(
                 {"test_mse": test_metrics["mse"], "test_mae": test_metrics["mae"]}
             )
+            mlflow.log_artifact(str(metrics_path))
 
-        if isinstance(model, TimeXLModelA):
-            proj_path = save_projection_examples(
-                model,
-                train_ds,
-                cfg,
-                Path(cfg.paths.output_dir) / "explain",
-                n_examples=3,
-            )
-            log.info("Saved projection examples to %s", proj_path)
-            if mlflow_enabled:
-                mlflow.log_artifact(str(proj_path))
+        h3_paths = write_h3_artifacts(
+            model,
+            train_ds,
+            test_loader,
+            cfg,
+            Path(cfg.paths.output_dir),
+        )
+        if mlflow_enabled:
+            for path in h3_paths.values():
+                mlflow.log_artifact(str(path))
 
         OmegaConf.save(cfg, Path(cfg.paths.output_dir) / "config_resolved.yaml")
         return test_metrics

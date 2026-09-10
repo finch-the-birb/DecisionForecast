@@ -9,18 +9,18 @@ from torch.utils.data import DataLoader
 
 from src.data.collate import forecast_collate
 from src.data.dataset import FNSPIDForecastDataset
-from src.models.timexl_a import TimeXLModelA
 
 
 @torch.no_grad()
 def save_projection_examples(
-    model: TimeXLModelA,
+    model: torch.nn.Module,
     dataset: FNSPIDForecastDataset,
     cfg: DictConfig,
     out_dir: Path,
     n_examples: int = 3,
+    max_bank_segments: int = 5000,
 ) -> Path:
-    """Save nearest train segments for prototypes (Model A, H3 prep)."""
+    """Save nearest train segments for prototypes (H3 projection)."""
     model.eval()
     device = next(model.parameters()).device
     loader = DataLoader(dataset, batch_size=64, shuffle=False, collate_fn=forecast_collate)
@@ -30,16 +30,19 @@ def save_projection_examples(
         x = batch["x"].to(device)
         text = batch["text"].to(device)
         out = model(x, text)
-        segment_bank.append(out.segments.reshape(-1, out.segments.size(-1)).cpu())
+        segs = out.segments
+        segment_bank.append(segs.reshape(-1, segs.size(-1)).cpu())
         for i in range(len(batch["ticker"])):
-            meta.append(
-                {
-                    "ticker": batch["ticker"][i],
-                    "end_date": batch["end_date"][i],
-                    "end_idx": int(batch["end_idx"][i]),
-                }
-            )
-        if sum(t.size(0) for t in segment_bank) > 5000:
+            for seg_i in range(int(segs.size(1))):
+                meta.append(
+                    {
+                        "ticker": batch["ticker"][i],
+                        "end_date": batch["end_date"][i],
+                        "end_idx": int(batch["end_idx"][i]),
+                        "segment": seg_i,
+                    }
+                )
+        if sum(t.size(0) for t in segment_bank) > max_bank_segments:
             break
 
     bank = torch.cat(segment_bank, dim=0)
@@ -56,6 +59,7 @@ def save_projection_examples(
             }
         )
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "projection_examples_a.json"
+    name = str(cfg.model.name)
+    path = out_dir / f"projection_examples_{name}.json"
     path.write_text(json.dumps(examples, indent=2), encoding="utf-8")
     return path

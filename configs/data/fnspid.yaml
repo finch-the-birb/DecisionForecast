@@ -1,0 +1,124 @@
+# FNSPID LTSF protocol — fixed temporal split, no leakage.
+name: fnspid
+
+# Resolve Data/ or data/ (legacy scripts use Data/FNSPID).
+root: ${oc.env:FNSPID_ROOT,Data/FNSPID}
+
+# Windowing (daily bars).
+lookback_T: 60
+lookbacks: [36, 60, 96]  # sensitivity on M*; core uses lookback_T
+patch_len: 12
+patch_stride: 6
+horizon: 7
+horizons: [7, 14, 30]
+
+features: [close, volume, open, high, low]
+target: close
+normalize: per_ticker_zscore
+
+split:
+  train_end: "2021-12-31"
+  val_end: "2022-12-31"
+
+tickers:
+  dev:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - FB
+    - NVDA
+    - TSLA
+    - JPM
+    - BAC
+    - WMT
+    - JNJ
+    - PG
+    - XOM
+    - DIS
+    - NFLX
+  paper:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - GOOG
+    - AMZN
+    - FB
+    - NVDA
+    - TSLA
+    - NFLX
+    - ADBE
+    - CSCO
+    - INTC
+    - CMCSA
+    - PEP
+    - COST
+    - AVGO
+    - TXN
+    - QCOM
+    - AMGN
+    - SBUX
+    - INTU
+    - AMD
+    - ISRG
+    - BKNG
+    - GILD
+    - ADP
+    - MDLZ
+    - PYPL
+    - MU
+    - AMAT
+    - JPM
+    - BAC
+    - WMT
+    - JNJ
+    - PG
+    - XOM
+    - DIS
+    - V
+    - MA
+    - UNH
+    - HD
+    - KO
+    - PFE
+    - MRK
+    - CVX
+    - ABBV
+    - TMO
+    - LLY
+    - WFC
+    - C
+    - GS
+    - CAT
+    - BA
+    - IBM
+    - GE
+    - NKE
+    - MCD
+    - CRM
+    - ORCL
+    - ACN
+    - T
+    - VZ
+    - UPS
+
+text:
+  enabled: true
+  # Frozen finance embedding model (not FinBERT). Public ST, no HF_TOKEN.
+  # Do not use gated FinLang/investopedia_embedding (401 without token).
+  encoder: FinLang/finance-embeddings-investopedia
+  encoder_url: https://huggingface.co/FinLang/finance-embeddings-investopedia
+  dim: 768
+  max_seq_tokens: 512
+  encode_batch_size: 64
+  article_field: Lsa_summary
+  article_fallback: title          # skip | title  (article-level; not decay)
+  daily_agg: mean
+  missing_policy: decay            # zero | carry | decay  (day-level)
+  decay_lambda: 0.03               # FNSPID: S_t = 3 + (S_0 - 3) e^{-0.03 t}
+  neutral: train_mean              # zero | train_mean
+  window_agg: recency_weighted     # last | mean | recency_weighted
+  renormalize: false
+  cache_dir: ${data.root}/cache/text_series
+
+news_source: nasdaq_exteral_data

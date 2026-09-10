@@ -48,12 +48,15 @@ TimeXL x TimeXer на FNSPID, абляции A / B / C0 / C1, метрики H1-
 - **C0**: TimeXer + прототипы + mid fusion **без** cross-attn (add/concat текста,
   НЕ через $G_en$).
 - **C1**: TimeXer + прототипы + mid fusion через канонический cross-attn TimeXer
-  ($G_en$ as bridge к exogenous/text tokens).
+  ($G_en$ as query к **единственному** exogenous token — text).
+- TimeXer: все каналы OHLCV — endogenous patches (M-style) + per-variate $G_en$.
+  Не inverted price-exo. B/C0: `exo=None`. C1: exo = text token `[B,1,D]`.
+  Head: mean-pool патчей target-канала (`close`).
 - Прототипы: **prototype-before-attn**, схема **G1+G2**:
   similarity/projection только по endogenous patch-токенам; $G_en$ не проецируется.
 - Residual injection: P <- P + W*S после PatchEmbed, затем стандартные слои TimeXer.
-- Текст: **замороженный** sentence embedding (офлайн прекомпут), не joint fine-tune
-  большого LLM в core pipeline.
+- Текст: **замороженный** per-article embedding → дневная серия (train-mean `mu`,
+  missing-day decay) → pooled `text` `[dim]` и `text_seq` `[T, dim]`. Не concat окна.
 - Один фактор за раз в абляциях; общий temporal split, горизонты H, seed.
 - Шоковые дни / стратификация по vol - out of scope.
 
@@ -134,7 +137,7 @@ DecisionForecast/
 - DoD: Hydra config резолвится; протокол эксперимента описан в configs/.
 
 ### Фаза 1 - Data + Model A (Sprint 1-2)
-- src/data/: PyTorch Dataset, окна [B,T,C], target, text embedding на окно.
+- src/data/: PyTorch Dataset, окна [B,T,C], target, daily text series + pooled window.
 - src/models/timexl_a.py: 1D-CNN, prototype losses + L_pred, late fusion, projection.
 - src/training/train.py + MLflow.
 - DoD: A обучается на dev subset; MSE/MAE; 2-3 примера projection.
@@ -146,11 +149,13 @@ DecisionForecast/
 
 ### Фаза 3 - C0, C1 (Sprint 5-6)
 - C0: mid без attention (не $G_en$ для текста).
-- C1: exogenous variate tokens + cross-attn через $G_en$.
+- C1: text-only exo token + cross-attn через $G_en$ (OHLCV полностью endogenous).
 - DoD: таблица A/B/C0/C1 + Δ(A→B), Δ(B→C0), Δ(C0→C1).
 
 ### Фаза 4 - H3 Explanatory (Sprint 7)
-- src/explain/: projection examples, faithfulness ablation для A, B, C1.
+- src/explain/: projection examples, faithfulness ablation для A, B, C1
+  (proto/text knockout + shuffle; Δ = ablated − full).
+- CLI: `python -m src.explain.run` (checkpoint) или H3 пишется в конце `train`.
 - DoD: таблица/рисунок + вердикт H3.
 
 ## MLflow / infra
