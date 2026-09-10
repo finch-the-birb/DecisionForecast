@@ -40,14 +40,16 @@ def _eval_variant(
         x = batch["x"].to(device)
         y = batch["y"].to(device)
         text = batch["text"].to(device)
+        text_seq = batch["text_seq"].to(device)
         out = model(
             x,
             text,
+            text_seq=text_seq,
             proto_mode=proto_mode,
             text_mode=text_mode,
             ablation_generator=generator,
         )
-        pred = out.pred if hasattr(out, "pred") else out
+        pred = out.pred
         preds.append(pred.cpu())
         targets.append(y.cpu())
     return compute_metrics(torch.cat(preds), torch.cat(targets))

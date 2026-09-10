@@ -1,12 +1,12 @@
-"""G1+G2 prototype injection + TimeXer ablations B / C0 / C1.
+"""G1+G2 prototype residual on TimeXer patches (shared by B / C0 / C1).
 
-G1+G2: similarity / residual only on endogenous patch tokens; G_en is not
-projected. Injection is P <- P + W S after PatchEmbed, then TimeXer layers.
+Similarity and ``project()`` run only on endogenous patch tokens ``P``;
+``G_en`` is never prototyped. Residual: ``P <- P + W_s(S)`` after PatchEmbed,
+before any text entry point.
 
-Fusion (one factor at a time; OHLCV is always endogenous):
-- late (B): text concat at the prediction head; no G_en→text
-- mid_no_attn (C0): add projected text to patch tokens; G_en is not a text query
-- mid_cross_attn (C1): text is the only exogenous variate token; G_en cross-attends
+The legacy ``TimeXerFusionModel`` (per-variate TimeXer) still backs C0/C1
+until those models are rewritten onto ``timexer_backbone``. Model B lives in
+``src/models/timexer_b.py``.
 """
 
 from __future__ import annotations
@@ -18,12 +18,33 @@ import torch.nn as nn
 
 from src.models.ablate import apply_feature_ablation
 from src.models.prototypes import PrototypeLosses, PrototypeModule
-from src.models.timexer import TimeXerBackbone
+from src.models.timexer import TimeXerBackbone as LegacyTimeXerBackbone
 
 _LATE = "late"
 _MID_ADD = "mid_no_attn"
 _MID_CROSS = "mid_cross_attn"
 _FUSIONS = (_LATE, _MID_ADD, _MID_CROSS)
+
+
+class PrototypeResidual(nn.Module):
+    """G1+G2: ``S, losses = proto(P)`` then ``P = P + W_s(S)``. ``G_en`` never enters."""
+
+    def __init__(self, n_prototypes: int, d_model: int, d_min: float) -> None:
+        super().__init__()
+        self.proto = PrototypeModule(n_prototypes, d_model, d_min)
+        self.w_s = nn.Linear(d_model, d_model)
+
+    def forward(
+        self,
+        patches: torch.Tensor,
+        proto_mode: str = "none",
+        ablation_generator: torch.Generator | None = None,
+    ) -> tuple[torch.Tensor, PrototypeLosses]:
+        proto_mix, proto_losses = self.proto(patches)
+        if proto_mode != "zero":
+            proto_mix = apply_feature_ablation(proto_mix, proto_mode, ablation_generator)
+            patches = patches + self.w_s(proto_mix)
+        return patches, proto_losses
 
 
 @dataclass
@@ -64,7 +85,7 @@ class TimeXerFusionModel(nn.Module):
         self.horizon = horizon
         self.fusion = fusion
         self.use_prototypes = use_prototypes
-        self.backbone = TimeXerBackbone(
+        self.backbone = LegacyTimeXerBackbone(
             seq_len=seq_len,
             n_features=n_features,
             target_idx=target_idx,
@@ -95,10 +116,12 @@ class TimeXerFusionModel(nn.Module):
         self,
         x: torch.Tensor,
         text: torch.Tensor,
+        text_seq: torch.Tensor | None = None,
         proto_mode: str = "none",
         text_mode: str = "none",
         ablation_generator: torch.Generator | None = None,
     ) -> ModelBOutput:
+        del text_seq
         patches, g_en, _stats = self.backbone.embed(x)
         batch, n_vars, n_patches, d_model = patches.shape
         if self.use_prototypes:

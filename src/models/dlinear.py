@@ -44,7 +44,14 @@ class DLinear(nn.Module):
         self.linear_seasonal = nn.Linear(seq_len, horizon)
         self.linear_trend = nn.Linear(seq_len, horizon)
 
-    def forward(self, x: torch.Tensor, text: torch.Tensor | None = None) -> ModelOutput:
+    def forward(
+        self,
+        x: torch.Tensor,
+        text: torch.Tensor | None = None,
+        text_seq: torch.Tensor | None = None,
+        **_kwargs,
+    ) -> ModelOutput:
+        del text, text_seq, _kwargs
         trend = self.moving_avg(x)
         seasonal = x - trend
         # [B, T, C] -> [B, C, T] -> linear on time -> [B, C, H] -> [B, H, C]

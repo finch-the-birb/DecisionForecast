@@ -40,7 +40,14 @@ class TimeXerPlain(nn.Module):
             nn.Linear(head_hidden, horizon),
         )
 
-    def forward(self, x: torch.Tensor, text: torch.Tensor | None = None) -> ModelOutput:
+    def forward(
+        self,
+        x: torch.Tensor,
+        text: torch.Tensor | None = None,
+        text_seq: torch.Tensor | None = None,
+        **_kwargs,
+    ) -> ModelOutput:
+        del text, text_seq, _kwargs
         enc_p = self.backbone(x, exo=None)
         pred = self.head(enc_p.mean(dim=1))
         return ModelOutput(pred=pred, proto_losses=None, segments=enc_p)

@@ -15,6 +15,8 @@ from src.data.dataset import build_datasets, log_text_coverage
 from src.evaluation.metrics import compute_metrics
 from src.explain.h3 import write_h3_artifacts
 from src.models.dlinear import DLinear
+from src.models.fusion import loggable_fusion
+from src.models.timexer_b import TimeXerB
 from src.models.timexer_plain import TimeXerPlain
 from src.models.timexl_a import TimeXLModelA
 from src.models.timexl_integration import TimeXerFusionModel
@@ -74,7 +76,25 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
             head_hidden=int(cfg.model.head.hidden),
         )
-    if name in {"b", "c0", "c1"}:
+    if name == "b":
+        return TimeXerB(
+            n_features=n_features,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_prototypes=int(cfg.model.n_prototypes),
+            d_min=float(cfg.model.d_min),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=int(cfg.data.text.dim),
+            text_hidden=int(cfg.model.text_mlp.hidden),
+            head_hidden=int(cfg.model.head.hidden),
+            fusion=cfg.model.fusion,
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+        )
+    if name in {"c0", "c1"}:
         return TimeXerFusionModel(
             n_features=n_features,
             seq_len=int(cfg.data.lookback_T),
@@ -110,8 +130,9 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
         x = batch["x"].to(device)
         y = batch["y"].to(device)
         text = batch["text"].to(device)
-        out = model(x, text)
-        pred = out.pred if hasattr(out, "pred") else out
+        text_seq = batch["text_seq"].to(device)
+        out = model(x, text, text_seq=text_seq)
+        pred = out.pred
         preds.append(pred.cpu())
         targets.append(y.cpu())
     return compute_metrics(torch.cat(preds), torch.cat(targets))
@@ -193,6 +214,10 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             log_cfg_params(cfg)
             mlflow.log_param("device", str(device))
             mlflow.log_param("n_params", n_params)
+            fusion_cfg = cfg.model.get("fusion")
+            if fusion_cfg is not None:
+                for key, value in loggable_fusion(fusion_cfg).items():
+                    mlflow.log_param(f"fusion.{key}", value)
             if coverage:
                 mlflow.log_metrics({k: float(v) for k, v in coverage.items()})
 
@@ -204,6 +229,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 x = batch["x"].to(device)
                 y = batch["y"].to(device)
                 text = batch["text"].to(device)
+                text_seq = batch["text_seq"].to(device)
                 if n_batches == 0:
                     log.info(
                         "First batch text L2 mean=%.4f (0 means empty/zero embeddings)",
@@ -213,12 +239,12 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         "First batch shapes x=%s text=%s text_seq=%s",
                         tuple(x.shape),
                         tuple(text.shape),
-                        tuple(batch["text_seq"].shape),
+                        tuple(text_seq.shape),
                     )
                     log.info("First batch tensors on x=%s text=%s", x.device, text.device)
                     log_cuda_memory("first train batch")
                 optimizer.zero_grad(set_to_none=True)
-                out = model(x, text)
+                out = model(x, text, text_seq=text_seq)
                 if not hasattr(model, "compute_loss"):
                     raise NotImplementedError(f"{type(model).__name__} has no compute_loss")
                 loss, train_metrics = model.compute_loss(

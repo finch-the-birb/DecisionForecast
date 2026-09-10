@@ -29,7 +29,8 @@ def save_projection_examples(
     for batch in loader:
         x = batch["x"].to(device)
         text = batch["text"].to(device)
-        out = model(x, text)
+        text_seq = batch["text_seq"].to(device)
+        out = model(x, text, text_seq=text_seq)
         segs = out.segments
         segment_bank.append(segs.reshape(-1, segs.size(-1)).cpu())
         for i in range(len(batch["ticker"])):

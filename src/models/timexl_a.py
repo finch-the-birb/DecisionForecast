@@ -96,10 +96,12 @@ class TimeXLModelA(nn.Module):
         self,
         x: torch.Tensor,
         text: torch.Tensor,
+        text_seq: torch.Tensor | None = None,
         proto_mode: str = "none",
         text_mode: str = "none",
         ablation_generator: torch.Generator | None = None,
     ) -> ModelAOutput:
+        del text_seq
         segments = self.encoder(x)
         proto_mix, proto_losses = self.proto(segments)
         if proto_mode != "zero":

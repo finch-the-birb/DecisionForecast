@@ -26,7 +26,7 @@ Forecasting article protocol: **TimeXL × TimeXer** on FNSPID.
   Daily `E[d]` = mean of articles in `[prev_trading_day, d)` minus train-only `mu`,
   else carry with `missing_policy=decay` (`λ=0.03`). Window pool: `recency_weighted`.
   OHLCV is endogenous (all channels patched). Exogenous for C1 is **text only**.
-  A/B: late fusion. C0: mid add to patches (no \(G_{en}\)→text). C1: text as the sole exo token via \(G_{en}\).
+  A/B: late fusion (B: pooled `text` at head, encoder `exo=None`). C0: mid add to patches (no \(G_{en}\)→text). C1: text as the sole exo via \(G_{en}\) cross-attn.
 
 ## Hypotheses
 
