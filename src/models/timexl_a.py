@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
+from src.models.ablate import apply_feature_ablation
 from src.models.prototypes import PrototypeLosses, PrototypeModule
 
 
@@ -91,12 +92,23 @@ class TimeXLModelA(nn.Module):
             nn.Linear(head_hidden, horizon),
         )
 
-    def forward(self, x: torch.Tensor, text: torch.Tensor) -> ModelAOutput:
+    def forward(
+        self,
+        x: torch.Tensor,
+        text: torch.Tensor,
+        proto_mode: str = "none",
+        text_mode: str = "none",
+        ablation_generator: torch.Generator | None = None,
+    ) -> ModelAOutput:
         segments = self.encoder(x)
         proto_mix, proto_losses = self.proto(segments)
-        segments = segments + self.inject(proto_mix)
+        if proto_mode != "zero":
+            proto_mix = apply_feature_ablation(proto_mix, proto_mode, ablation_generator)
+            segments = segments + self.inject(proto_mix)
         ts_repr = segments.mean(dim=1)
-        text_repr = self.text_mlp(text)
+        text_repr = apply_feature_ablation(
+            self.text_mlp(text), text_mode, ablation_generator
+        )
         fused = torch.cat([ts_repr, text_repr], dim=-1)
         pred = self.head(fused)
         return ModelAOutput(pred=pred, proto_losses=proto_losses, segments=segments)

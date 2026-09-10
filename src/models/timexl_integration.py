@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
+from src.models.ablate import apply_feature_ablation
 from src.models.prototypes import PrototypeLosses, PrototypeModule
 from src.models.timexer import TimeXerBackbone
 
@@ -90,25 +91,41 @@ class TimeXerFusionModel(nn.Module):
             nn.Linear(head_hidden, horizon),
         )
 
-    def forward(self, x: torch.Tensor, text: torch.Tensor) -> ModelBOutput:
+    def forward(
+        self,
+        x: torch.Tensor,
+        text: torch.Tensor,
+        proto_mode: str = "none",
+        text_mode: str = "none",
+        ablation_generator: torch.Generator | None = None,
+    ) -> ModelBOutput:
         patches, g_en, _stats = self.backbone.embed(x)
         batch, n_vars, n_patches, d_model = patches.shape
         if self.use_prototypes:
             flat = patches.reshape(batch, n_vars * n_patches, d_model)
             proto_mix, proto_losses = self.proto(flat)
-            patches = patches + self.inject(proto_mix).view(batch, n_vars, n_patches, d_model)
+            if proto_mode != "zero":
+                proto_mix = apply_feature_ablation(
+                    proto_mix, proto_mode, ablation_generator
+                )
+                patches = patches + self.inject(proto_mix).view(
+                    batch, n_vars, n_patches, d_model
+                )
         else:
             proto_losses = PrototypeLosses(
                 l_c=patches.new_zeros(()),
                 l_e=patches.new_zeros(()),
                 l_d=patches.new_zeros(()),
             )
-        text_tok = self.text_mlp(text)
+        text_tok = apply_feature_ablation(
+            self.text_mlp(text), text_mode, ablation_generator
+        )
         exo = None
-        if self.fusion == _MID_ADD:
-            patches = patches + text_tok.view(batch, 1, 1, d_model)
-        elif self.fusion == _MID_CROSS:
-            exo = text_tok.unsqueeze(1)
+        if text_mode != "zero":
+            if self.fusion == _MID_ADD:
+                patches = patches + text_tok.view(batch, 1, 1, d_model)
+            elif self.fusion == _MID_CROSS:
+                exo = text_tok.unsqueeze(1)
         enc_patches, _enc_g = self.backbone.encode(patches, g_en, exo)
         target_patches = enc_patches[:, self.backbone.target_idx, :, :]
         ts_repr = target_patches.mean(dim=1)

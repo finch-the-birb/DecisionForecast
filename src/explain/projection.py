@@ -18,8 +18,9 @@ def save_projection_examples(
     cfg: DictConfig,
     out_dir: Path,
     n_examples: int = 3,
+    max_bank_segments: int = 5000,
 ) -> Path:
-    """Save nearest train segments for prototypes (H3 prep)."""
+    """Save nearest train segments for prototypes (H3 projection)."""
     model.eval()
     device = next(model.parameters()).device
     loader = DataLoader(dataset, batch_size=64, shuffle=False, collate_fn=forecast_collate)
@@ -41,7 +42,7 @@ def save_projection_examples(
                         "segment": seg_i,
                     }
                 )
-        if sum(t.size(0) for t in segment_bank) > 5000:
+        if sum(t.size(0) for t in segment_bank) > max_bank_segments:
             break
 
     bank = torch.cat(segment_bank, dim=0)

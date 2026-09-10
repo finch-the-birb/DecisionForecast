@@ -4,6 +4,7 @@ defaults:
   - data: fnspid
   - model: a
   - train: default
+  - explain: default
   - _self_
 
 experiment:

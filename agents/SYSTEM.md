@@ -153,7 +153,9 @@ DecisionForecast/
 - DoD: таблица A/B/C0/C1 + Δ(A→B), Δ(B→C0), Δ(C0→C1).
 
 ### Фаза 4 - H3 Explanatory (Sprint 7)
-- src/explain/: projection examples, faithfulness ablation для A, B, C1.
+- src/explain/: projection examples, faithfulness ablation для A, B, C1
+  (proto/text knockout + shuffle; Δ = ablated − full).
+- CLI: `python -m src.explain.run` (checkpoint) или H3 пишется в конце `train`.
 - DoD: таблица/рисунок + вердикт H3.
 
 ## MLflow / infra

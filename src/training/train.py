@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from src.data.collate import forecast_collate
 from src.data.dataset import build_datasets
 from src.evaluation.metrics import compute_metrics
-from src.explain.projection import save_projection_examples
+from src.explain.h3 import write_h3_artifacts
 from src.models.timexl_a import TimeXLModelA
 from src.models.timexl_integration import TimeXerFusionModel
 from src.utils.device import log_cuda_memory, log_torch_device, resolve_device
@@ -261,17 +261,16 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             )
             mlflow.log_artifact(str(metrics_path))
 
-        if hasattr(model, "proto"):
-            proj_path = save_projection_examples(
-                model,
-                train_ds,
-                cfg,
-                Path(cfg.paths.output_dir) / "explain",
-                n_examples=3,
-            )
-            log.info("Saved projection examples to %s", proj_path)
-            if mlflow_enabled:
-                mlflow.log_artifact(str(proj_path))
+        h3_paths = write_h3_artifacts(
+            model,
+            train_ds,
+            test_loader,
+            cfg,
+            Path(cfg.paths.output_dir),
+        )
+        if mlflow_enabled:
+            for path in h3_paths.values():
+                mlflow.log_artifact(str(path))
 
         OmegaConf.save(cfg, Path(cfg.paths.output_dir) / "config_resolved.yaml")
         return test_metrics
