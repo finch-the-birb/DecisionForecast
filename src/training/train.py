@@ -42,9 +42,15 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
     except ValueError as exc:
         raise ValueError(f"target {target!r} not in features {features}") from exc
     name = str(cfg.model.name)
+    seq_len = int(cfg.data.lookback_T)
+    head_cfg = cfg.model.get("head", {})
+    head_type = str(head_cfg.get("type", "linear"))
+    head_hidden = int(head_cfg.get("hidden", 128))
+    head_dropout = float(head_cfg.get("dropout", 0.0))
     if name == "a":
         return TimeXLModelA(
             n_features=n_features,
+            seq_len=seq_len,
             horizon=int(cfg.data.horizon),
             d_model=int(cfg.model.d_model),
             n_prototypes=int(cfg.model.n_prototypes),
@@ -55,8 +61,10 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             cnn_kernel=int(cfg.model.cnn.kernel_size),
             text_dim=int(cfg.data.text.dim),
             text_hidden=int(cfg.model.text_mlp.hidden),
-            head_hidden=int(cfg.model.head.hidden),
+            head_hidden=head_hidden,
             fusion=cfg.model.fusion,
+            head_type=head_type,
+            head_dropout=head_dropout,
         )
     if name == "dlinear":
         return DLinear(
@@ -69,6 +77,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
     if name == "timexer_plain":
         return TimeXerPlain(
             n_features=n_features,
+            seq_len=seq_len,
             horizon=int(cfg.data.horizon),
             d_model=int(cfg.model.d_model),
             n_heads=int(cfg.model.n_heads),
@@ -77,11 +86,14 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             patch_stride=int(cfg.data.patch_stride),
             dropout=float(cfg.model.dropout),
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
-            head_hidden=int(cfg.model.head.hidden),
+            head_type=head_type,
+            head_hidden=head_hidden,
+            head_dropout=head_dropout,
         )
     if name == "b":
         return TimeXerB(
             n_features=n_features,
+            seq_len=seq_len,
             horizon=int(cfg.data.horizon),
             d_model=int(cfg.model.d_model),
             n_prototypes=int(cfg.model.n_prototypes),
@@ -93,13 +105,16 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             dropout=float(cfg.model.dropout),
             text_dim=int(cfg.data.text.dim),
             text_hidden=int(cfg.model.text_mlp.hidden),
-            head_hidden=int(cfg.model.head.hidden),
+            head_hidden=head_hidden,
             fusion=cfg.model.fusion,
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_type=head_type,
+            head_dropout=head_dropout,
         )
     if name == "c0":
         return TimeXerC0(
             n_features=n_features,
+            seq_len=seq_len,
             horizon=int(cfg.data.horizon),
             d_model=int(cfg.model.d_model),
             n_prototypes=int(cfg.model.n_prototypes),
@@ -110,13 +125,16 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             patch_stride=int(cfg.data.patch_stride),
             dropout=float(cfg.model.dropout),
             text_dim=int(cfg.data.text.dim),
-            head_hidden=int(cfg.model.head.hidden),
+            head_hidden=head_hidden,
             fusion=cfg.model.fusion,
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_type=head_type,
+            head_dropout=head_dropout,
         )
     if name == "c1":
         return TimeXerC1(
             n_features=n_features,
+            seq_len=seq_len,
             horizon=int(cfg.data.horizon),
             d_model=int(cfg.model.d_model),
             n_prototypes=int(cfg.model.n_prototypes),
@@ -127,9 +145,11 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             patch_stride=int(cfg.data.patch_stride),
             dropout=float(cfg.model.dropout),
             text_dim=int(cfg.data.text.dim),
-            head_hidden=int(cfg.model.head.hidden),
+            head_hidden=head_hidden,
             fusion=cfg.model.fusion,
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_type=head_type,
+            head_dropout=head_dropout,
         )
     raise NotImplementedError(
         f"Model '{name}' not implemented. Use model=a, b, c0, c1, timexer_plain, or dlinear."

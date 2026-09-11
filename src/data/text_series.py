@@ -136,8 +136,15 @@ def mu_path(
     return series_cache_dir(cache_root, model_name) / name
 
 
-def ticker_series_path(cache_root: Path, model_name: str, ticker: str) -> Path:
-    return series_cache_dir(cache_root, model_name) / f"{ticker}.npz"
+def ticker_series_path(
+    cache_root: Path,
+    model_name: str,
+    ticker: str,
+    lam: float = 0.03,
+    missing_policy: str = "decay",
+) -> Path:
+    lam_str = f"{float(lam):.4f}".rstrip("0").rstrip(".")
+    return series_cache_dir(cache_root, model_name) / f"{ticker}_{missing_policy}_lam{lam_str}.npz"
 
 
 def compute_train_mu(
@@ -186,15 +193,27 @@ def load_or_build_daily_series(
     lam: float,
     missing_policy: str,
 ) -> tuple[np.ndarray, np.ndarray]:
-    path = ticker_series_path(cache_root, model_name, ticker)
+    path = ticker_series_path(
+        cache_root=cache_root,
+        model_name=model_name,
+        ticker=ticker,
+        lam=lam,
+        missing_policy=missing_policy,
+    )
     date_iso = pd.DatetimeIndex(pd.to_datetime(trading_dates)).tz_localize(None).strftime("%Y-%m-%d").to_numpy()
     if path.exists():
         with np.load(path, allow_pickle=True) as data:
             cached_dates = np.asarray(data["dates"]).astype(str)
+            cached_lam = float(data["lam"]) if "lam" in data else None
+            cached_policy = str(data["missing_policy"]) if "missing_policy" in data else None
+            lam_match = cached_lam is not None and np.isclose(cached_lam, float(lam), atol=1e-6)
+            policy_match = cached_policy == str(missing_policy)
             if (
                 cached_dates.shape == date_iso.shape
                 and np.array_equal(cached_dates, date_iso)
                 and data["E"].shape[-1] == mu.shape[-1]
+                and lam_match
+                and policy_match
             ):
                 return np.asarray(data["E"], dtype=np.float32), np.asarray(data["has_news"], dtype=bool)
     keys, texts, mask = extract_article_payloads(news, article_field, article_fallback)
@@ -209,5 +228,12 @@ def load_or_build_daily_series(
         trading_dates, art_dates, vecs, mu, lam, missing_policy=missing_policy
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, E=e, has_news=has_news, dates=date_iso)
+    np.savez(
+        path,
+        E=e,
+        has_news=has_news,
+        dates=date_iso,
+        lam=float(lam),
+        missing_policy=str(missing_policy),
+    )
     return e, has_news

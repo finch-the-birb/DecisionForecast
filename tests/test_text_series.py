@@ -88,3 +88,17 @@ def test_first_day_lo_is_one_calendar_day() -> None:
     assert has2[0]
     np.testing.assert_allclose(e2[0], np.array([4.0, 0.0], dtype=np.float32))
 
+
+def test_ticker_series_path_includes_lam_and_policy(tmp_path) -> None:
+    from src.data.text_series import ticker_series_path
+
+    p1 = ticker_series_path(tmp_path, "enc", "AAPL", lam=0.03, missing_policy="decay")
+    p2 = ticker_series_path(tmp_path, "enc", "AAPL", lam=0.10, missing_policy="decay")
+    p3 = ticker_series_path(tmp_path, "enc", "AAPL", lam=0.03, missing_policy="zero")
+    assert p1.name == "AAPL_decay_lam0.03.npz"
+    assert p2.name == "AAPL_decay_lam0.1.npz"
+    assert p3.name == "AAPL_zero_lam0.03.npz"
+    assert p1 != p2
+    assert p1 != p3
+
+

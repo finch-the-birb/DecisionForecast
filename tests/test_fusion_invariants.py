@@ -28,6 +28,7 @@ def _c0_fusion(**overrides):
 def _make_c0(**fusion_overrides) -> TimeXerC0:
     return TimeXerC0(
         n_features=5,
+        seq_len=60,
         horizon=7,
         d_model=32,
         n_prototypes=4,
@@ -47,6 +48,7 @@ def _make_c0(**fusion_overrides) -> TimeXerC0:
 def _make_b() -> TimeXerB:
     return TimeXerB(
         n_features=5,
+        seq_len=60,
         horizon=7,
         d_model=32,
         n_prototypes=4,
@@ -127,7 +129,8 @@ def test_c0_proto_before_text_and_g_en_unmodified() -> None:
 
 def test_c0_head_has_no_text_concat() -> None:
     model = _make_c0()
-    assert model.head[0].in_features == 32
+    # FlattenHead linear: in_features = 9 * 32
+    assert model.head.net[1].in_features == 9 * 32
     out = model(torch.randn(3, 60, 5), torch.randn(3, 768), text_seq=torch.randn(3, 60, 768))
     assert out.pred.shape == (3, 7)
 
@@ -138,6 +141,7 @@ def test_zero_text_seq_b_c0_c1_pred_shapes() -> None:
 
     c1_m = TimeXerC1(
         n_features=5,
+        seq_len=60,
         horizon=7,
         d_model=32,
         n_prototypes=4,
@@ -181,4 +185,5 @@ def test_hydra_model_c0_nested_fusion() -> None:
     assert cfg.model.fusion.text_align == "per_patch"
     model = build_model(cfg)
     assert isinstance(model, TimeXerC0)
-    assert model.head[0].in_features == int(cfg.model.d_model)
+    # T=60, patch_len=12, stride=6 -> N=9 patches; FlattenHead linear: in_features = 9 * d_model
+    assert model.head.net[1].in_features == 9 * int(cfg.model.d_model)

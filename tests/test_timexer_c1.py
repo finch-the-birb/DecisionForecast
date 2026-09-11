@@ -30,6 +30,7 @@ def _c1_fusion(**overrides):
 def _make_c1(**fusion_overrides) -> TimeXerC1:
     return TimeXerC1(
         n_features=5,
+        seq_len=60,
         horizon=7,
         d_model=32,
         n_prototypes=4,
@@ -49,6 +50,7 @@ def _make_c1(**fusion_overrides) -> TimeXerC1:
 def _shared_kwargs() -> dict:
     return dict(
         n_features=5,
+        seq_len=60,
         horizon=7,
         d_model=32,
         n_prototypes=4,
@@ -76,6 +78,7 @@ def test_c1_fusion_rejects_wrong_flags() -> None:
 def test_c1_proto_and_patches_independent_of_text() -> None:
     model = TimeXerC1(
         n_features=5,
+        seq_len=60,
         horizon=7,
         d_model=32,
         n_prototypes=4,
@@ -120,7 +123,7 @@ def test_c1_proto_and_patches_independent_of_text() -> None:
     torch.testing.assert_close(encode_p[0], encode_p[1])
     assert encode_exo[0].shape == (2, 60, 32)
     assert not torch.allclose(out_a.pred, out_b.pred)
-    assert model.head[0].in_features == 32
+    assert model.head.net[1].in_features == 9 * 32
 
 
 def test_c1_per_patch_exo_shape() -> None:
@@ -187,4 +190,5 @@ def test_hydra_model_c1() -> None:
     assert cfg.model.fusion.exo_tokens == "per_day"
     model = build_model(cfg)
     assert isinstance(model, TimeXerC1)
-    assert model.head[0].in_features == int(cfg.model.d_model)
+    # T=60, patch_len=12, stride=6 -> N=9 patches; FlattenHead linear: in_features = 9 * d_model
+    assert model.head.net[1].in_features == 9 * int(cfg.model.d_model)

@@ -46,6 +46,7 @@ def test_plain_and_dlinear_forward_shapes() -> None:
     text = torch.randn(b, 768)
     plain = TimeXerPlain(
         n_features=c,
+        seq_len=t,
         horizon=h,
         d_model=32,
         n_heads=4,

@@ -24,7 +24,9 @@ use_norm: false
 use_prototypes: true
 
 head:
-  hidden: 128
+  type: linear       # linear (default) | mlp
+  hidden: 128        # for mlp
+  dropout: 0.1
 
 loss:
   lambda_c: 0.1

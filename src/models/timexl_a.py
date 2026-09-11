@@ -7,7 +7,9 @@ import torch.nn as nn
 
 from src.models.ablate import apply_feature_ablation
 from src.models.fusion import assert_fusion
+from src.models.head import FlattenHead
 from src.models.prototypes import PrototypeLosses, PrototypeModule
+from src.models.timexer_backbone import n_patches
 
 
 @dataclass
@@ -58,6 +60,7 @@ class TimeXLModelA(nn.Module):
     def __init__(
         self,
         n_features: int,
+        seq_len: int,
         horizon: int,
         d_model: int,
         n_prototypes: int,
@@ -70,6 +73,8 @@ class TimeXLModelA(nn.Module):
         text_hidden: int,
         head_hidden: int,
         fusion,
+        head_type: str = "linear",
+        head_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.fusion = assert_fusion(
@@ -95,10 +100,15 @@ class TimeXLModelA(nn.Module):
             nn.ReLU(),
             nn.Linear(text_hidden, d_model),
         )
-        self.head = nn.Sequential(
-            nn.Linear(d_model * 2, head_hidden),
-            nn.ReLU(),
-            nn.Linear(head_hidden, horizon),
+        n_p = n_patches(seq_len, patch_len, patch_stride)
+        self.head = FlattenHead(
+            n_patches=n_p,
+            d_model=d_model,
+            horizon=horizon,
+            head_type=head_type,
+            head_hidden=head_hidden,
+            dropout=head_dropout,
+            extra_dim=d_model,
         )
 
     def forward(
@@ -117,12 +127,10 @@ class TimeXLModelA(nn.Module):
         if proto_mode != "zero":
             proto_mix = apply_feature_ablation(proto_mix, proto_mode, ablation_generator)
             segments = bank + self.inject(proto_mix)
-        ts_repr = segments.mean(dim=1)
         text_repr = apply_feature_ablation(
             self.text_mlp(text), text_mode, ablation_generator
         )
-        fused = torch.cat([ts_repr, text_repr], dim=-1)
-        pred = self.head(fused)
+        pred = self.head(segments, extra=text_repr)
         return ModelAOutput(pred=pred, proto_losses=proto_losses, segments=bank)
 
     def compute_loss(

@@ -5,14 +5,16 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from src.models.head import FlattenHead
 from src.models.outputs import ModelOutput, compute_pred_loss
-from src.models.timexer_backbone import TimeXerBackbone
+from src.models.timexer_backbone import TimeXerBackbone, n_patches
 
 
 class TimeXerPlain(nn.Module):
     def __init__(
         self,
         n_features: int,
+        seq_len: int,
         horizon: int,
         d_model: int,
         n_heads: int,
@@ -21,7 +23,9 @@ class TimeXerPlain(nn.Module):
         patch_stride: int,
         dropout: float,
         d_ff: int | None = None,
+        head_type: str = "linear",
         head_hidden: int = 128,
+        head_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.backbone = TimeXerBackbone(
@@ -34,10 +38,15 @@ class TimeXerPlain(nn.Module):
             dropout=dropout,
             d_ff=d_ff,
         )
-        self.head = nn.Sequential(
-            nn.Linear(d_model, head_hidden),
-            nn.ReLU(),
-            nn.Linear(head_hidden, horizon),
+        n_p = n_patches(seq_len, patch_len, patch_stride)
+        self.head = FlattenHead(
+            n_patches=n_p,
+            d_model=d_model,
+            horizon=horizon,
+            head_type=head_type,
+            head_hidden=head_hidden,
+            dropout=head_dropout,
+            extra_dim=0,
         )
 
     def forward(
@@ -49,7 +58,7 @@ class TimeXerPlain(nn.Module):
     ) -> ModelOutput:
         del text, text_seq, _kwargs
         enc_p = self.backbone(x, exo=None)
-        pred = self.head(enc_p.mean(dim=1))
+        pred = self.head(enc_p)
         return ModelOutput(pred=pred, proto_losses=None, segments=enc_p)
 
     def compute_loss(

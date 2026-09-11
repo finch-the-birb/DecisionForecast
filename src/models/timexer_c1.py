@@ -13,8 +13,9 @@ import torch.nn as nn
 
 from src.models.ablate import apply_feature_ablation
 from src.models.fusion import assert_fusion
+from src.models.head import FlattenHead
 from src.models.outputs import ModelOutput, compute_pred_loss
-from src.models.timexer_backbone import TimeXerBackbone, days_to_patches
+from src.models.timexer_backbone import TimeXerBackbone, days_to_patches, n_patches
 from src.models.timexl_integration import PrototypeResidual
 
 
@@ -22,6 +23,7 @@ class TimeXerC1(nn.Module):
     def __init__(
         self,
         n_features: int,
+        seq_len: int,
         horizon: int,
         d_model: int,
         n_prototypes: int,
@@ -35,6 +37,8 @@ class TimeXerC1(nn.Module):
         head_hidden: int,
         fusion: Any,
         d_ff: int | None = None,
+        head_type: str = "linear",
+        head_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.fusion = assert_fusion(
@@ -58,10 +62,15 @@ class TimeXerC1(nn.Module):
         )
         self.g12 = PrototypeResidual(n_prototypes, d_model, d_min)
         self.exo_embed = nn.Linear(text_dim, d_model)
-        self.head = nn.Sequential(
-            nn.Linear(d_model, head_hidden),
-            nn.ReLU(),
-            nn.Linear(head_hidden, horizon),
+        n_p = n_patches(seq_len, patch_len, patch_stride)
+        self.head = FlattenHead(
+            n_patches=n_p,
+            d_model=d_model,
+            horizon=horizon,
+            head_type=head_type,
+            head_hidden=head_hidden,
+            dropout=head_dropout,
+            extra_dim=0,
         )
 
     @property
@@ -93,7 +102,7 @@ class TimeXerC1(nn.Module):
             self.exo_embed(days), text_mode, ablation_generator
         )
         enc_p, _g = self.backbone.encode(patches, g_en, exo=exo)
-        pred = self.head(enc_p.mean(dim=1))
+        pred = self.head(enc_p)
         return ModelOutput(pred=pred, proto_losses=proto_losses, segments=bank)
 
     def compute_loss(

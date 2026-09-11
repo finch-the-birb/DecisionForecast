@@ -12,7 +12,9 @@ d_ff: 256
 dropout: 0.1
 
 head:
-  hidden: 128
+  type: linear       # linear (default) | mlp
+  hidden: 128        # for mlp
+  dropout: 0.1
 
 loss:
   lambda_c: 0.0

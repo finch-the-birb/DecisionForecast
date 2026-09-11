@@ -24,6 +24,7 @@ def _fusion(**overrides):
 def _make_b(**fusion_overrides) -> TimeXerB:
     return TimeXerB(
         n_features=5,
+        seq_len=60,
         horizon=7,
         d_model=32,
         n_prototypes=4,
@@ -48,6 +49,7 @@ def test_b_fusion_asserts_nested_flags() -> None:
     with pytest.raises(AssertionError, match="must be a mapping"):
         TimeXerB(
             n_features=5,
+            seq_len=60,
             horizon=7,
             d_model=32,
             n_prototypes=4,
@@ -67,7 +69,8 @@ def test_b_fusion_asserts_nested_flags() -> None:
 def test_b_head_is_late_concat_and_ignores_text_seq() -> None:
     model = _make_b()
     model.eval()
-    assert model.head[0].in_features == 64  # 2 * d_model
+    # T=60 (default seq_len in _make_b), N=9 patches; extra_dim=32; FlattenHead: 9*32 + 32 = 320
+    assert model.head.net[1].in_features == 9 * 32 + 32
     b, t, c = 2, 60, 5
     x = torch.randn(b, t, c)
     text = torch.randn(b, 768)
