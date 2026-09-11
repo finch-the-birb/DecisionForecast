@@ -27,10 +27,10 @@ uv sync
 - log: `outputs/head-cache-sweep.log`
 - started_at: 2026-09-11T18:04:54Z
 - first_job: `model=dlinear train.lr=0.0003 train.seed=0`
-- timer: one-shot 10800s harvest
+- timer: 10800s fired 2026-09-11T21:05Z — still running, 53/72 DONE; current `c0 proto=5 lam=0.10 seed=2`; no second timer
 
 ## Key signals
-- metrics: n/a (started)
+- metrics: n/a (still running)
 - oom: n/a
 - traceback_summary: n/a
 
@@ -39,4 +39,4 @@ uv sync
 
 ## Conclusions for Dev
 1. Sweep launched; 72 sequential jobs in 4 blocks. Did not wait on PID. Did not run paper / seed=42 / extra T/H / caps / ablation_table.
-2. Four block mean±std tables + answers (FlattenHead vs mean-pool, vs DLinear, decay_lambda) will replace this report when the 180 min timer fires (or on human ping).
+2. 10800s timer fired; sweep still running (53/72, block 4). Waiting for human ping to harvest. No second timer.
