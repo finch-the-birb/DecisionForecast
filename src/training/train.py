@@ -47,6 +47,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
     head_type = str(head_cfg.get("type", "linear"))
     head_hidden = int(head_cfg.get("hidden", 128))
     head_dropout = float(head_cfg.get("dropout", 0.0))
+    head_pool = str(head_cfg.get("pool", "mean"))
     if name == "a":
         return TimeXLModelA(
             n_features=n_features,
@@ -65,6 +66,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             fusion=cfg.model.fusion,
             head_type=head_type,
             head_dropout=head_dropout,
+            head_pool=head_pool,
         )
     if name == "dlinear":
         return DLinear(
@@ -89,6 +91,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_type=head_type,
             head_hidden=head_hidden,
             head_dropout=head_dropout,
+            head_pool=head_pool,
         )
     if name == "b":
         return TimeXerB(
@@ -110,6 +113,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
             head_type=head_type,
             head_dropout=head_dropout,
+            head_pool=head_pool,
         )
     if name == "c0":
         return TimeXerC0(
@@ -130,6 +134,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
             head_type=head_type,
             head_dropout=head_dropout,
+            head_pool=head_pool,
         )
     if name == "c1":
         return TimeXerC1(
@@ -150,6 +155,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
             head_type=head_type,
             head_dropout=head_dropout,
+            head_pool=head_pool,
         )
     raise NotImplementedError(
         f"Model '{name}' not implemented. Use model=a, b, c0, c1, timexer_plain, or dlinear."

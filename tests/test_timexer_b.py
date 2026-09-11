@@ -69,8 +69,9 @@ def test_b_fusion_asserts_nested_flags() -> None:
 def test_b_head_is_late_concat_and_ignores_text_seq() -> None:
     model = _make_b()
     model.eval()
-    # T=60 (default seq_len in _make_b), N=9 patches; extra_dim=32; FlattenHead: 9*32 + 32 = 320
-    assert model.head.net[1].in_features == 9 * 32 + 32
+    # Mean-pool + late text: in_features = d_model + extra_dim = 32 + 32
+    assert model.head.pool == "mean"
+    assert model.head.net[1].in_features == 32 + 32
     b, t, c = 2, 60, 5
     x = torch.randn(b, t, c)
     text = torch.randn(b, 768)

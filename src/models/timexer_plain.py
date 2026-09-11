@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from src.models.head import FlattenHead
+from src.models.head import ForecastHead
 from src.models.outputs import ModelOutput, compute_pred_loss
 from src.models.timexer_backbone import TimeXerBackbone, n_patches
 
@@ -26,6 +26,7 @@ class TimeXerPlain(nn.Module):
         head_type: str = "linear",
         head_hidden: int = 128,
         head_dropout: float = 0.0,
+        head_pool: str = "mean",
     ) -> None:
         super().__init__()
         self.backbone = TimeXerBackbone(
@@ -39,10 +40,11 @@ class TimeXerPlain(nn.Module):
             d_ff=d_ff,
         )
         n_p = n_patches(seq_len, patch_len, patch_stride)
-        self.head = FlattenHead(
-            n_patches=n_p,
+        self.head = ForecastHead(
             d_model=d_model,
             horizon=horizon,
+            pool=head_pool,
+            n_patches=n_p,
             head_type=head_type,
             head_hidden=head_hidden,
             dropout=head_dropout,
@@ -57,8 +59,9 @@ class TimeXerPlain(nn.Module):
         **_kwargs,
     ) -> ModelOutput:
         del text, text_seq, _kwargs
-        enc_p = self.backbone(x, exo=None)
-        pred = self.head(enc_p)
+        patches, g_en = self.backbone.embed(x)
+        enc_p, _g = self.backbone.encode(patches, g_en, exo=None)
+        pred = self.head(enc_p, g_en=_g)
         return ModelOutput(pred=pred, proto_losses=None, segments=enc_p)
 
     def compute_loss(

@@ -13,7 +13,7 @@ import torch.nn as nn
 
 from src.models.ablate import apply_feature_ablation
 from src.models.fusion import assert_fusion, fusion_map
-from src.models.head import FlattenHead
+from src.models.head import ForecastHead
 from src.models.outputs import ModelOutput, compute_pred_loss
 from src.models.timexer_backbone import TimeXerBackbone, days_to_patches, n_patches
 from src.models.timexl_integration import PrototypeResidual
@@ -39,6 +39,7 @@ class TimeXerC0(nn.Module):
         d_ff: int | None = None,
         head_type: str = "linear",
         head_dropout: float = 0.0,
+        head_pool: str = "mean",
     ) -> None:
         super().__init__()
         flags = fusion_map(fusion)
@@ -75,10 +76,11 @@ class TimeXerC0(nn.Module):
             nn.Linear(d_model * 2, d_model) if self.text_inject == "concat_proj" else None
         )
         n_p = n_patches(seq_len, patch_len, patch_stride)
-        self.head = FlattenHead(
-            n_patches=n_p,
+        self.head = ForecastHead(
             d_model=d_model,
             horizon=horizon,
+            pool=head_pool,
+            n_patches=n_p,
             head_type=head_type,
             head_hidden=head_hidden,
             dropout=head_dropout,
@@ -123,7 +125,7 @@ class TimeXerC0(nn.Module):
         patches, proto_losses = self.g12(patches, proto_mode, ablation_generator)
         patches = self._inject_text(patches, text_seq, text_mode, ablation_generator)
         enc_p, _g = self.backbone.encode(patches, g_en, exo=None)
-        pred = self.head(enc_p)
+        pred = self.head(enc_p, g_en=_g)
         return ModelOutput(pred=pred, proto_losses=proto_losses, segments=bank)
 
     def compute_loss(

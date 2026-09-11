@@ -24,8 +24,9 @@ use_norm: false
 use_prototypes: true
 
 head:
-  type: linear       # linear (default) | mlp
-  hidden: 128        # for mlp
+  pool: mean         # mean (default) | last | global | flatten
+  type: linear       # linear | mlp
+  hidden: 128
   dropout: 0.1
 
 loss:

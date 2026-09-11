@@ -129,8 +129,9 @@ def test_c0_proto_before_text_and_g_en_unmodified() -> None:
 
 def test_c0_head_has_no_text_concat() -> None:
     model = _make_c0()
-    # FlattenHead linear: in_features = 9 * 32
-    assert model.head.net[1].in_features == 9 * 32
+    # Compact mean-pool head: in_features = d_model (no text concat)
+    assert model.head.net[1].in_features == 32
+    assert model.head.pool == "mean"
     out = model(torch.randn(3, 60, 5), torch.randn(3, 768), text_seq=torch.randn(3, 60, 768))
     assert out.pred.shape == (3, 7)
 
@@ -185,5 +186,6 @@ def test_hydra_model_c0_nested_fusion() -> None:
     assert cfg.model.fusion.text_align == "per_patch"
     model = build_model(cfg)
     assert isinstance(model, TimeXerC0)
-    # T=60, patch_len=12, stride=6 -> N=9 patches; FlattenHead linear: in_features = 9 * d_model
-    assert model.head.net[1].in_features == 9 * int(cfg.model.d_model)
+    # Default mean-pool head: in_features = d_model
+    assert model.head.pool == "mean"
+    assert model.head.net[1].in_features == int(cfg.model.d_model)
