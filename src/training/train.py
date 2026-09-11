@@ -10,7 +10,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
-from src.data.collate import forecast_collate
+from src.data.collate import make_forecast_loader
 from src.data.dataset import build_datasets, log_text_coverage
 from src.evaluation.metrics import compute_metrics
 from src.explain.h3 import write_h3_artifacts
@@ -185,26 +185,20 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             "Empty train/val/test split after capping; check tickers, dates, and max_*_windows"
         )
 
-    train_loader = DataLoader(
-        train_ds,
+    pin_memory = device.type == "cuda"
+    loader_kw = dict(
         batch_size=int(cfg.train.batch_size),
-        shuffle=True,
         num_workers=int(cfg.train.num_workers),
-        collate_fn=forecast_collate,
+        pin_memory=pin_memory,
     )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=int(cfg.train.batch_size),
-        shuffle=False,
-        num_workers=int(cfg.train.num_workers),
-        collate_fn=forecast_collate,
-    )
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=int(cfg.train.batch_size),
-        shuffle=False,
-        num_workers=int(cfg.train.num_workers),
-        collate_fn=forecast_collate,
+    train_loader = make_forecast_loader(train_ds, shuffle=True, **loader_kw)
+    val_loader = make_forecast_loader(val_ds, shuffle=False, **loader_kw)
+    test_loader = make_forecast_loader(test_ds, shuffle=False, **loader_kw)
+    log.info(
+        "DataLoader num_workers=%d pin_memory=%s persistent_workers=%s",
+        train_loader.num_workers,
+        train_loader.pin_memory,
+        bool(getattr(train_loader, "persistent_workers", False)),
     )
 
     model = build_model(cfg).to(device)
@@ -224,13 +218,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
     proto_cfg = cfg.train.get("proto", {})
     init_bank: torch.Tensor | None = None
     if hasattr(model, "proto") and str(proto_cfg.get("init", "random")) == "kmeans":
-        bank_loader = DataLoader(
-            train_ds,
-            batch_size=int(cfg.train.batch_size),
-            shuffle=True,
-            num_workers=int(cfg.train.num_workers),
-            collate_fn=forecast_collate,
-        )
+        bank_loader = make_forecast_loader(train_ds, shuffle=True, **loader_kw)
         init_bank, _meta = collect_segment_bank(
             model,
             bank_loader,

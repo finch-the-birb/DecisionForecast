@@ -410,6 +410,108 @@ def _validate_lookback(lookback: int, patch_len: int, patch_stride: int) -> None
         )
 
 
+def _window_news_fracs(
+    has_news: np.ndarray | None, starts: np.ndarray, ends: np.ndarray
+) -> np.ndarray:
+    n = int(starts.shape[0])
+    if n == 0:
+        return np.zeros(0, dtype=np.float64)
+    if has_news is None or len(has_news) == 0:
+        return np.zeros(n, dtype=np.float64)
+    hn = np.asarray(has_news, dtype=np.float64)
+    c = np.concatenate([[0.0], np.cumsum(hn)])
+    length = np.maximum((ends - starts).astype(np.float64), 1.0)
+    return (c[ends] - c[starts]) / length
+
+
+def _pooled_text_l2(
+    text_seq: np.ndarray,
+    starts: np.ndarray,
+    ends: np.ndarray,
+    window_agg: str,
+    lam: float,
+    renormalize: bool,
+) -> np.ndarray:
+    n_win = int(starts.shape[0])
+    if n_win == 0:
+        return np.zeros(0, dtype=np.float64)
+    lengths = ends - starts
+    unique_len = np.unique(lengths)
+    if unique_len.size == 1:
+        t_len = int(unique_len[0])
+        if t_len <= 0:
+            return np.zeros(n_win, dtype=np.float64)
+        dim = int(text_seq.shape[1])
+        n_days = int(text_seq.shape[0])
+        if window_agg == "last":
+            pooled = np.asarray(text_seq[ends - 1], dtype=np.float32)
+        elif window_agg == "mean":
+            c = np.cumsum(text_seq.astype(np.float64), axis=0)
+            cpad = np.vstack([np.zeros((1, dim), dtype=np.float64), c])
+            pooled = ((cpad[ends] - cpad[starts]) / float(t_len)).astype(np.float32)
+        elif window_agg == "recency_weighted":
+            ages = np.arange(t_len - 1, -1, -1, dtype=np.float64)
+            weights = np.exp(-float(lam) * ages)
+            wsum = float(weights.sum())
+            n_pool = n_days - t_len + 1
+            if n_pool <= 0:
+                pooled = np.stack(
+                    [
+                        pool_window(text_seq, int(s), int(e), window_agg, lam, renormalize=False)
+                        for s, e in zip(starts, ends, strict=True)
+                    ]
+                )
+            else:
+                seq64 = np.asarray(text_seq, dtype=np.float64)
+                acc = np.zeros((n_pool, dim), dtype=np.float64)
+                for k, weight in enumerate(weights):
+                    acc += weight * seq64[k : k + n_pool]
+                pooled = (acc / wsum).astype(np.float32)[starts]
+        else:
+            raise ValueError(f"window_agg={window_agg!r}; expected last|mean|recency_weighted")
+        if renormalize:
+            norms = np.linalg.norm(pooled, axis=1, keepdims=True)
+            norms = np.maximum(norms, 1e-8)
+            pooled = pooled / norms.astype(np.float32)
+        return np.linalg.norm(pooled.astype(np.float64), axis=1)
+    out = np.empty(n_win, dtype=np.float64)
+    for i, (start, end) in enumerate(zip(starts, ends, strict=True)):
+        pooled = pool_window(
+            text_seq, int(start), int(end), window_agg, lam, renormalize=renormalize
+        )
+        out[i] = float(np.linalg.norm(pooled))
+    return out
+
+
+def split_text_coverage(ds: FNSPIDForecastDataset) -> tuple[float, float, float]:
+    """Window news-frac / pooled-text L2 from WindowIndex + series (no __getitem__)."""
+    n = len(ds)
+    if n == 0:
+        return 0.0, 0.0, 0.0
+    fracs = np.zeros(n, dtype=np.float64)
+    norms = np.zeros(n, dtype=np.float64)
+    by_ticker: dict[str, list[int]] = {}
+    for i, wi in enumerate(ds.indices):
+        by_ticker.setdefault(wi.ticker, []).append(i)
+    for ticker, idxs in by_ticker.items():
+        ts = ds.series[ticker]
+        pos = np.asarray(idxs, dtype=np.int64)
+        starts = np.asarray([ds.indices[i].start_idx for i in idxs], dtype=np.int64)
+        ends = np.asarray([ds.indices[i].end_idx for i in idxs], dtype=np.int64)
+        if not ds.text_enabled or ts.text_seq is None:
+            continue
+        fracs[pos] = _window_news_fracs(ts.has_news, starts, ends)
+        norms[pos] = _pooled_text_l2(
+            ts.text_seq,
+            starts,
+            ends,
+            ds.window_agg,
+            ds.decay_lambda,
+            ds.renormalize,
+        )
+    return float(fracs.mean()), float((fracs == 0.0).mean()), float(norms.mean())
+
+
 def log_text_coverage(
     splits: dict[str, FNSPIDForecastDataset],
     series: dict[str, TickerSeries],
@@ -427,16 +529,7 @@ def log_text_coverage(
         if len(ds) == 0:
             log.info("TEXT_COVERAGE split=%s windows=0", split_name)
             continue
-        fracs: list[float] = []
-        norms: list[float] = []
-        for i in range(len(ds)):
-            item = ds[i]
-            fracs.append(float(item["has_news_frac"]))
-            norms.append(float(torch.linalg.vector_norm(item["text"]).item()))
-        arr = np.asarray(fracs, dtype=np.float64)
-        zero_frac = float((arr == 0.0).mean())
-        mean_frac = float(arr.mean())
-        mean_norm = float(np.mean(norms)) if norms else 0.0
+        mean_frac, zero_frac, mean_norm = split_text_coverage(ds)
         metrics[f"text_coverage_{split_name}_news_frac"] = mean_frac
         metrics[f"text_coverage_{split_name}_zero_windows"] = zero_frac
         metrics[f"text_coverage_{split_name}_mean_text_l2"] = mean_norm

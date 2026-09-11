@@ -5,7 +5,7 @@ batch_size: 32
 epochs: 20
 lr: 0.001
 weight_decay: 0.0001
-num_workers: 0
+num_workers: 4  # CPU prefetch; Dataset stays on CPU (no CUDA in workers)
 patience: 5
 eval_every: 1
 grad_clip: 1.0

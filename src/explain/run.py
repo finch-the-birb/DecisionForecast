@@ -8,9 +8,8 @@ from pathlib import Path
 import hydra
 import torch
 from omegaconf import DictConfig
-from torch.utils.data import DataLoader
 
-from src.data.collate import forecast_collate
+from src.data.collate import make_forecast_loader
 from src.data.dataset import build_datasets
 from src.explain.h3 import write_h3_artifacts
 from src.training.train import build_model
@@ -38,12 +37,12 @@ def run_explain(cfg: DictConfig) -> dict[str, Path]:
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
 
     train_ds, _val_ds, test_ds = build_datasets(cfg, device=device)
-    test_loader = DataLoader(
+    test_loader = make_forecast_loader(
         test_ds,
         batch_size=int(cfg.train.batch_size),
         shuffle=False,
         num_workers=int(cfg.train.num_workers),
-        collate_fn=forecast_collate,
+        pin_memory=device.type == "cuda",
     )
     model = build_model(cfg).to(device)
     state = torch.load(ckpt_path, map_location=device, weights_only=True)
