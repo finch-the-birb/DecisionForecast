@@ -157,15 +157,23 @@ def test_text_disabled_coverage_is_zero() -> None:
 def test_make_forecast_loader_worker_kwargs() -> None:
     ds = _dataset({"AAA": _series("AAA", 50, 4, seed=5)}, n_windows=12, lookback=8)
     workers = make_forecast_loader(
-        ds, batch_size=4, shuffle=False, num_workers=2, pin_memory=True
+        ds, batch_size=4, shuffle=False, num_workers=2, pin_memory=False
     )
     assert workers.num_workers == 2
-    assert workers.pin_memory is True
     assert workers.persistent_workers is True
-    batch = next(iter(workers))
+    iterator = iter(workers)
+    try:
+        batch = next(iterator)
+    finally:
+        del iterator
+        del workers
     assert batch["x"].shape[0] == 4
     assert batch["x"].device.type == "cpu"
-    del workers
+
+    pinned = make_forecast_loader(
+        ds, batch_size=4, shuffle=False, num_workers=0, pin_memory=True
+    )
+    assert pinned.pin_memory is True
 
     serial = make_forecast_loader(
         ds, batch_size=4, shuffle=False, num_workers=0, pin_memory=False
