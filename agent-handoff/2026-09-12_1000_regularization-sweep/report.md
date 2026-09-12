@@ -26,10 +26,10 @@ uv sync
 - log: `outputs/regularization-sweep.log`
 - started_at: 2026-09-12T06:45:19Z
 - first_job: `model=c1 model.n_prototypes=5 model.head.pool=last model.loss.kind=mse train.seed=0`
-- timer: one-shot 9000s harvest
+- timer: 9000s fired 2026-09-12T09:15Z — still running, 42/60 DONE; current `c1 proto=5 pool=last e_layers=1 seed=0`; no second timer
 
 ## Key signals
-- metrics: n/a (started)
+- metrics: n/a (still running)
 - oom: n/a
 - traceback_summary: n/a
 
@@ -38,4 +38,4 @@ uv sync
 
 ## Conclusions for Dev
 1. Sweep launched; 60 sequential jobs (20 configs × seeds 0/1/2). Did not wait on PID. Did not run flatten / A / B / paper / extra T/H.
-2. Four tables + answers (loss / proto λ / wd-capacity / Huber+wd vs DLinear) will replace this report when the 150 min timer fires (or on human ping).
+2. 9000s timer fired; sweep still running (42/60, block 3). Waiting for human ping to harvest. No second timer.
