@@ -15,15 +15,15 @@ d_model: 64
 n_prototypes: 10
 d_min: 0.5
 n_heads: 4
-e_layers: 2
+e_layers: 1            # regularization-sweep: 1 layer closed most of the DLinear gap
 d_ff: 256
 dropout: 0.1
 use_norm: false
 use_prototypes: true
 
 head:
-  pool: mean         # mean (default) | last | global | flatten
-  type: linear       # linear | mlp
+  pool: last         # last-patch (C1.1 champion) | mean | global | flatten
+  type: linear
   hidden: 128
   dropout: 0.1
 

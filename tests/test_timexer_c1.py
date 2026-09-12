@@ -191,6 +191,6 @@ def test_hydra_model_c1() -> None:
     assert cfg.model.fusion.exo_tokens == "per_day"
     model = build_model(cfg)
     assert isinstance(model, TimeXerC1)
-    # Default mean-pool head: in_features = d_model
-    assert model.head.pool == "mean"
+    assert int(cfg.model.e_layers) == 1
+    assert model.head.pool == "last"
     assert model.head.net[1].in_features == int(cfg.model.d_model)

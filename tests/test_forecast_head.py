@@ -250,8 +250,11 @@ def test_hydra_build_default_mean_and_overrides() -> None:
             cfg = compose(config_name="config", overrides=[f"model={m}"])
             model = build_model(cfg)
             assert isinstance(model.head, ForecastHead)
-            assert model.head.pool == "mean"
+            expected_pool = "last" if m == "c1" else "mean"
+            assert model.head.pool == expected_pool
             assert model.head.head_type == "linear"
+            if m == "c1":
+                assert int(cfg.model.e_layers) == 1
 
         cfg_last = compose(
             config_name="config",

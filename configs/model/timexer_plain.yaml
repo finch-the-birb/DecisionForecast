@@ -7,7 +7,7 @@ use_prototypes: false
 
 d_model: 64
 n_heads: 4
-e_layers: 2
+e_layers: 2            # override with model.e_layers=1
 d_ff: 256
 dropout: 0.1
 
