@@ -39,6 +39,8 @@ class TickerSeries:
     dates: pd.Series
     text_seq: np.ndarray | None = None
     has_news: np.ndarray | None = None
+    target_mean: float = 0.0
+    target_std: float = 1.0
 
 
 class TickerDataStore:
@@ -53,7 +55,13 @@ class TickerDataStore:
         self._price_index = _price_csv_index(self.prices_dir)
         self._news: dict[str, pd.DataFrame] = {}
 
-    def get_series(self, ticker: str, train_end: pd.Timestamp | None = None) -> TickerSeries:
+    def get_series(
+        self,
+        ticker: str,
+        train_end: pd.Timestamp | None = None,
+        train_start: pd.Timestamp | None = None,
+        normalize: str = "per_ticker_zscore",
+    ) -> TickerSeries:
         return _load_ticker_series(
             self.prices_dir,
             ticker,
@@ -61,6 +69,8 @@ class TickerDataStore:
             self.target,
             train_end,
             price_index=self._price_index,
+            train_start=train_start,
+            normalize=normalize,
         )
 
     def get_news(self, ticker: str) -> pd.DataFrame:
@@ -127,6 +137,8 @@ def _load_ticker_series(
     target: str,
     train_end: pd.Timestamp | None = None,
     price_index: dict[str, Path] | None = None,
+    train_start: pd.Timestamp | None = None,
+    normalize: str = "per_ticker_zscore",
 ) -> TickerSeries:
     df = _load_price_ticker(prices_dir, ticker, price_index)
     feat_cols = [_normalize_col(c) for c in features]
@@ -135,26 +147,42 @@ def _load_ticker_series(
     if missing:
         raise KeyError(f"{ticker}: missing columns {missing}; have {list(df.columns)}")
     df = df.dropna(subset=feat_cols + [target_col]).reset_index(drop=True)
+    if train_start is not None:
+        df = df.loc[df["date"] >= train_start].reset_index(drop=True)
+    if len(df) < 2:
+        raise ValueError(f"{ticker}: fewer than 2 rows after train_start filter")
     feat_values = df[feat_cols].astype(np.float64).values
     target_raw = df[target_col].astype(np.float64).values
     dates = df["date"]
+    if normalize == "per_window":
+        return TickerSeries(
+            features=feat_values.astype(np.float32),
+            target=target_raw.astype(np.float32),
+            dates=dates,
+        )
+    if normalize != "per_ticker_zscore":
+        raise ValueError(f"normalize={normalize!r}; expected per_window|per_ticker_zscore")
+    train_mask = np.ones(len(df), dtype=bool)
     if train_end is not None:
-        train_mask = dates <= train_end
-        if int(train_mask.sum()) < 2:
-            raise ValueError(f"{ticker}: fewer than 2 train rows for z-score")
-        feat_ref = feat_values[train_mask.to_numpy()]
-        target_ref = target_raw[train_mask.to_numpy()]
-    else:
-        feat_ref = feat_values
-        target_ref = target_raw
+        train_mask &= (dates <= train_end).to_numpy()
+    if int(train_mask.sum()) < 2:
+        raise ValueError(f"{ticker}: fewer than 2 train rows for z-score")
+    feat_ref = feat_values[train_mask]
+    target_ref = target_raw[train_mask]
     mean = feat_ref.mean(axis=0)
     std = feat_ref.std(axis=0)
     std[std < 1e-8] = 1.0
     features_norm = ((feat_values - mean) / std).astype(np.float32)
-    target_mean = target_ref.mean()
-    target_std = target_ref.std() if target_ref.std() > 1e-8 else 1.0
+    target_mean = float(target_ref.mean())
+    target_std = float(target_ref.std()) if target_ref.std() > 1e-8 else 1.0
     target_norm = ((target_raw - target_mean) / target_std).astype(np.float32)
-    return TickerSeries(features=features_norm, target=target_norm, dates=dates)
+    return TickerSeries(
+        features=features_norm,
+        target=target_norm,
+        dates=dates,
+        target_mean=target_mean,
+        target_std=target_std,
+    )
 
 
 def _news_cache_path(root: Path, source: str, ticker: str) -> Path:
@@ -250,6 +278,8 @@ class FNSPIDForecastDataset(Dataset):
         window_agg: str = "recency_weighted",
         decay_lambda: float = 0.03,
         renormalize: bool = False,
+        normalize: str = "per_ticker_zscore",
+        target_idx: int = 0,
     ) -> None:
         self.indices = indices
         self.store = store
@@ -260,6 +290,8 @@ class FNSPIDForecastDataset(Dataset):
         self.window_agg = window_agg
         self.decay_lambda = decay_lambda
         self.renormalize = renormalize
+        self.normalize = normalize
+        self.target_idx = target_idx
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -267,8 +299,21 @@ class FNSPIDForecastDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         wi = self.indices[idx]
         ts = self.series[wi.ticker]
-        x = ts.features[wi.start_idx : wi.end_idx]
-        y = ts.target[wi.end_idx : wi.end_idx + self.horizon]
+        raw_x = ts.features[wi.start_idx : wi.end_idx]
+        raw_y = ts.target[wi.end_idx : wi.end_idx + self.horizon]
+        if self.normalize == "per_window":
+            mean = raw_x.mean(axis=0)
+            std = raw_x.std(axis=0)
+            std = np.where(std < 1e-8, 1.0, std).astype(np.float64)
+            x = ((raw_x - mean) / std).astype(np.float32)
+            t_mean = float(mean[self.target_idx])
+            t_std = float(std[self.target_idx])
+            y = ((raw_y.astype(np.float64) - t_mean) / t_std).astype(np.float32)
+            y_mean, y_std = t_mean, t_std
+        else:
+            x = np.asarray(raw_x, dtype=np.float32)
+            y = np.asarray(raw_y, dtype=np.float32)
+            y_mean, y_std = float(ts.target_mean), float(ts.target_std)
         t_len = wi.end_idx - wi.start_idx
         if self.text_enabled and ts.text_seq is not None:
             text_seq = ts.text_seq[wi.start_idx : wi.end_idx]
@@ -289,8 +334,10 @@ class FNSPIDForecastDataset(Dataset):
             text = np.zeros(self.text_dim, dtype=np.float32)
             has_news_frac = 0.0
         return {
-            "x": torch.from_numpy(x.copy()),
-            "y": torch.from_numpy(y.copy()),
+            "x": torch.from_numpy(np.asarray(x, dtype=np.float32).copy()),
+            "y": torch.from_numpy(np.asarray(y, dtype=np.float32).copy()),
+            "y_mean": torch.tensor(y_mean, dtype=torch.float32),
+            "y_std": torch.tensor(y_std, dtype=torch.float32),
             "text": torch.from_numpy(np.asarray(text, dtype=np.float32)),
             "text_seq": torch.from_numpy(np.asarray(text_seq, dtype=np.float32).copy()),
             "has_news_frac": torch.tensor(has_news_frac, dtype=torch.float32),
@@ -363,6 +410,108 @@ def _validate_lookback(lookback: int, patch_len: int, patch_stride: int) -> None
         )
 
 
+def _window_news_fracs(
+    has_news: np.ndarray | None, starts: np.ndarray, ends: np.ndarray
+) -> np.ndarray:
+    n = int(starts.shape[0])
+    if n == 0:
+        return np.zeros(0, dtype=np.float64)
+    if has_news is None or len(has_news) == 0:
+        return np.zeros(n, dtype=np.float64)
+    hn = np.asarray(has_news, dtype=np.float64)
+    c = np.concatenate([[0.0], np.cumsum(hn)])
+    length = np.maximum((ends - starts).astype(np.float64), 1.0)
+    return (c[ends] - c[starts]) / length
+
+
+def _pooled_text_l2(
+    text_seq: np.ndarray,
+    starts: np.ndarray,
+    ends: np.ndarray,
+    window_agg: str,
+    lam: float,
+    renormalize: bool,
+) -> np.ndarray:
+    n_win = int(starts.shape[0])
+    if n_win == 0:
+        return np.zeros(0, dtype=np.float64)
+    lengths = ends - starts
+    unique_len = np.unique(lengths)
+    if unique_len.size == 1:
+        t_len = int(unique_len[0])
+        if t_len <= 0:
+            return np.zeros(n_win, dtype=np.float64)
+        dim = int(text_seq.shape[1])
+        n_days = int(text_seq.shape[0])
+        if window_agg == "last":
+            pooled = np.asarray(text_seq[ends - 1], dtype=np.float32)
+        elif window_agg == "mean":
+            c = np.cumsum(text_seq.astype(np.float64), axis=0)
+            cpad = np.vstack([np.zeros((1, dim), dtype=np.float64), c])
+            pooled = ((cpad[ends] - cpad[starts]) / float(t_len)).astype(np.float32)
+        elif window_agg == "recency_weighted":
+            ages = np.arange(t_len - 1, -1, -1, dtype=np.float64)
+            weights = np.exp(-float(lam) * ages)
+            wsum = float(weights.sum())
+            n_pool = n_days - t_len + 1
+            if n_pool <= 0:
+                pooled = np.stack(
+                    [
+                        pool_window(text_seq, int(s), int(e), window_agg, lam, renormalize=False)
+                        for s, e in zip(starts, ends, strict=True)
+                    ]
+                )
+            else:
+                seq64 = np.asarray(text_seq, dtype=np.float64)
+                acc = np.zeros((n_pool, dim), dtype=np.float64)
+                for k, weight in enumerate(weights):
+                    acc += weight * seq64[k : k + n_pool]
+                pooled = (acc / wsum).astype(np.float32)[starts]
+        else:
+            raise ValueError(f"window_agg={window_agg!r}; expected last|mean|recency_weighted")
+        if renormalize:
+            norms = np.linalg.norm(pooled, axis=1, keepdims=True)
+            norms = np.maximum(norms, 1e-8)
+            pooled = pooled / norms.astype(np.float32)
+        return np.linalg.norm(pooled.astype(np.float64), axis=1)
+    out = np.empty(n_win, dtype=np.float64)
+    for i, (start, end) in enumerate(zip(starts, ends, strict=True)):
+        pooled = pool_window(
+            text_seq, int(start), int(end), window_agg, lam, renormalize=renormalize
+        )
+        out[i] = float(np.linalg.norm(pooled))
+    return out
+
+
+def split_text_coverage(ds: FNSPIDForecastDataset) -> tuple[float, float, float]:
+    """Window news-frac / pooled-text L2 from WindowIndex + series (no __getitem__)."""
+    n = len(ds)
+    if n == 0:
+        return 0.0, 0.0, 0.0
+    fracs = np.zeros(n, dtype=np.float64)
+    norms = np.zeros(n, dtype=np.float64)
+    by_ticker: dict[str, list[int]] = {}
+    for i, wi in enumerate(ds.indices):
+        by_ticker.setdefault(wi.ticker, []).append(i)
+    for ticker, idxs in by_ticker.items():
+        ts = ds.series[ticker]
+        pos = np.asarray(idxs, dtype=np.int64)
+        starts = np.asarray([ds.indices[i].start_idx for i in idxs], dtype=np.int64)
+        ends = np.asarray([ds.indices[i].end_idx for i in idxs], dtype=np.int64)
+        if not ds.text_enabled or ts.text_seq is None:
+            continue
+        fracs[pos] = _window_news_fracs(ts.has_news, starts, ends)
+        norms[pos] = _pooled_text_l2(
+            ts.text_seq,
+            starts,
+            ends,
+            ds.window_agg,
+            ds.decay_lambda,
+            ds.renormalize,
+        )
+    return float(fracs.mean()), float((fracs == 0.0).mean()), float(norms.mean())
+
+
 def log_text_coverage(
     splits: dict[str, FNSPIDForecastDataset],
     series: dict[str, TickerSeries],
@@ -380,16 +529,7 @@ def log_text_coverage(
         if len(ds) == 0:
             log.info("TEXT_COVERAGE split=%s windows=0", split_name)
             continue
-        fracs: list[float] = []
-        norms: list[float] = []
-        for i in range(len(ds)):
-            item = ds[i]
-            fracs.append(float(item["has_news_frac"]))
-            norms.append(float(torch.linalg.vector_norm(item["text"]).item()))
-        arr = np.asarray(fracs, dtype=np.float64)
-        zero_frac = float((arr == 0.0).mean())
-        mean_frac = float(arr.mean())
-        mean_norm = float(np.mean(norms)) if norms else 0.0
+        mean_frac, zero_frac, mean_norm = split_text_coverage(ds)
         metrics[f"text_coverage_{split_name}_news_frac"] = mean_frac
         metrics[f"text_coverage_{split_name}_zero_windows"] = zero_frac
         metrics[f"text_coverage_{split_name}_mean_text_l2"] = mean_norm
@@ -422,6 +562,7 @@ def _attach_text_series(
     lam = float(text_cfg.decay_lambda)
     missing_policy = str(text_cfg.missing_policy)
     ticker_set = str(cfg.train.ticker_set)
+    train_start = _as_naive_day(cfg.data.split.train_start) if cfg.data.split.get("train_start") else None
     daily_agg = str(text_cfg.get("daily_agg", "mean"))
     if daily_agg != "mean":
         raise ValueError(f"daily_agg={daily_agg!r}; only mean is implemented")
@@ -435,7 +576,7 @@ def _attach_text_series(
         prefix=str(text_cfg.get("prefix", "") or ""),
     )
     news_by_ticker = {ticker: store.get_news(ticker) for ticker in series}
-    mu_file = mu_path(cache_root, model_name, ticker_set)
+    mu_file = mu_path(cache_root, model_name, ticker_set, train_start, train_end)
     if str(text_cfg.get("neutral", "train_mean")) == "zero":
         mu = np.zeros(dim, dtype=np.float32)
     elif mu_file.exists():
@@ -449,6 +590,7 @@ def _attach_text_series(
                 train_end,
                 article_field,
                 article_fallback,
+                train_start=train_start,
             )
             np.save(mu_file, mu)
     else:
@@ -459,10 +601,19 @@ def _attach_text_series(
             train_end,
             article_field,
             article_fallback,
+            train_start=train_start,
         )
         mu_file.parent.mkdir(parents=True, exist_ok=True)
         np.save(mu_file, mu)
-    log.info("Text mu ticker_set=%s L2=%.4f dim=%d", ticker_set, float(np.linalg.norm(mu)), mu.size)
+    log.info(
+        "Text mu ticker_set=%s train_start=%s train_end=%s L2=%.4f dim=%d file=%s",
+        ticker_set,
+        None if train_start is None else str(train_start.date()),
+        str(train_end.date()),
+        float(np.linalg.norm(mu)),
+        mu.size,
+        mu_file.name,
+    )
     for ticker, ts in series.items():
         e, has_news = load_or_build_daily_series(
             ticker=ticker,
@@ -494,15 +645,28 @@ def build_datasets(
     target_col = str(cfg.data.target)
     train_end = _as_naive_day(cfg.data.split.train_end)
     val_end = _as_naive_day(cfg.data.split.val_end)
+    train_start = (
+        _as_naive_day(cfg.data.split.train_start) if cfg.data.split.get("train_start") else None
+    )
+    normalize = str(cfg.data.get("normalize", "per_ticker_zscore"))
     text_enabled = bool(cfg.data.text.get("enabled", True))
     text_dim = int(cfg.data.text.dim)
     _validate_lookback(lookback, int(cfg.data.patch_len), int(cfg.data.patch_stride))
+    try:
+        target_idx = [str(f) for f in features].index(target_col)
+    except ValueError as exc:
+        raise ValueError(f"target {target_col!r} not in features {features}") from exc
 
     store = TickerDataStore(root, str(cfg.data.news_source), features, target_col)
     series: dict[str, TickerSeries] = {}
     for ticker in tickers:
         try:
-            series[ticker] = store.get_series(ticker, train_end=train_end)
+            series[ticker] = store.get_series(
+                ticker,
+                train_end=train_end,
+                train_start=train_start,
+                normalize=normalize,
+            )
         except (FileNotFoundError, KeyError, ValueError) as exc:
             log.warning("Skipping ticker %s: %s", ticker, exc)
     if not series:
@@ -547,6 +711,8 @@ def build_datasets(
         window_agg=str(cfg.data.text.get("window_agg", "recency_weighted")),
         decay_lambda=float(cfg.data.text.get("decay_lambda", 0.03)),
         renormalize=bool(cfg.data.text.get("renormalize", False)),
+        normalize=normalize,
+        target_idx=target_idx,
     )
     train_ds = FNSPIDForecastDataset(_cap(train_idx, cfg.train.max_train_windows), **common)
     val_ds = FNSPIDForecastDataset(_cap(val_idx, cfg.train.max_val_windows), **common)

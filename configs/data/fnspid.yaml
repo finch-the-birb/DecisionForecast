@@ -14,9 +14,10 @@ horizons: [7, 14, 30]
 
 features: [close, volume, open, high, low]
 target: close
-normalize: per_ticker_zscore
+normalize: per_window          # per_window | per_ticker_zscore (legacy)
 
 split:
+  train_start: "2015-01-01"   # price rows < train_start dropped before windowing
   train_end: "2021-12-31"
   val_end: "2022-12-31"
 

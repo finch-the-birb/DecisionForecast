@@ -58,8 +58,9 @@ def build_daily_series(
     seen_news = False
     left = 0
     n_art = len(art_ns)
+    one_day_ns = np.int64(24 * 60 * 60 * 10**9)
     for i in range(n_days):
-        lo = day_ns[i - 1] if i > 0 else np.iinfo(np.int64).min
+        lo = day_ns[i - 1] if i > 0 else day_ns[0] - one_day_ns
         hi = day_ns[i]
         while left < n_art and art_ns[left] < lo:
             left += 1
@@ -119,12 +120,31 @@ def series_cache_dir(cache_root: Path, model_name: str) -> Path:
     return path
 
 
-def mu_path(cache_root: Path, model_name: str, ticker_set: str) -> Path:
-    return series_cache_dir(cache_root, model_name) / f"mu_{ticker_set}.npy"
+def mu_path(
+    cache_root: Path,
+    model_name: str,
+    ticker_set: str,
+    train_start: pd.Timestamp | str | None = None,
+    train_end: pd.Timestamp | str | None = None,
+) -> Path:
+    if train_start is not None and train_end is not None:
+        ts = pd.Timestamp(train_start).strftime("%Y-%m-%d")
+        te = pd.Timestamp(train_end).strftime("%Y-%m-%d")
+        name = f"mu_{ticker_set}_{ts}_{te}.npy"
+    else:
+        name = f"mu_{ticker_set}.npy"
+    return series_cache_dir(cache_root, model_name) / name
 
 
-def ticker_series_path(cache_root: Path, model_name: str, ticker: str) -> Path:
-    return series_cache_dir(cache_root, model_name) / f"{ticker}.npz"
+def ticker_series_path(
+    cache_root: Path,
+    model_name: str,
+    ticker: str,
+    lam: float = 0.03,
+    missing_policy: str = "decay",
+) -> Path:
+    lam_str = f"{float(lam):.4f}".rstrip("0").rstrip(".")
+    return series_cache_dir(cache_root, model_name) / f"{ticker}_{missing_policy}_lam{lam_str}.npz"
 
 
 def compute_train_mu(
@@ -134,6 +154,7 @@ def compute_train_mu(
     train_end: pd.Timestamp,
     article_field: str,
     article_fallback: str,
+    train_start: pd.Timestamp | None = None,
 ) -> np.ndarray:
     chunks: list[np.ndarray] = []
     for ticker in tickers:
@@ -148,6 +169,8 @@ def compute_train_mu(
         dates = pd.to_datetime(news.iloc[np.flatnonzero(mask)]["Date"], utc=True, errors="coerce")
         dates = dates.dt.tz_convert(None).dt.normalize()
         keep = (dates <= train_end).to_numpy()
+        if train_start is not None:
+            keep = keep & (dates >= train_start).to_numpy()
         if keep.any():
             chunks.append(vecs[keep])
     if not chunks:
@@ -170,15 +193,27 @@ def load_or_build_daily_series(
     lam: float,
     missing_policy: str,
 ) -> tuple[np.ndarray, np.ndarray]:
-    path = ticker_series_path(cache_root, model_name, ticker)
+    path = ticker_series_path(
+        cache_root=cache_root,
+        model_name=model_name,
+        ticker=ticker,
+        lam=lam,
+        missing_policy=missing_policy,
+    )
     date_iso = pd.DatetimeIndex(pd.to_datetime(trading_dates)).tz_localize(None).strftime("%Y-%m-%d").to_numpy()
     if path.exists():
         with np.load(path, allow_pickle=True) as data:
             cached_dates = np.asarray(data["dates"]).astype(str)
+            cached_lam = float(data["lam"]) if "lam" in data else None
+            cached_policy = str(data["missing_policy"]) if "missing_policy" in data else None
+            lam_match = cached_lam is not None and np.isclose(cached_lam, float(lam), atol=1e-6)
+            policy_match = cached_policy == str(missing_policy)
             if (
                 cached_dates.shape == date_iso.shape
                 and np.array_equal(cached_dates, date_iso)
                 and data["E"].shape[-1] == mu.shape[-1]
+                and lam_match
+                and policy_match
             ):
                 return np.asarray(data["E"], dtype=np.float32), np.asarray(data["has_news"], dtype=bool)
     keys, texts, mask = extract_article_payloads(news, article_field, article_fallback)
@@ -193,5 +228,12 @@ def load_or_build_daily_series(
         trading_dates, art_dates, vecs, mu, lam, missing_policy=missing_policy
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, E=e, has_news=has_news, dates=date_iso)
+    np.savez(
+        path,
+        E=e,
+        has_news=has_news,
+        dates=date_iso,
+        lam=float(lam),
+        missing_policy=str(missing_policy),
+    )
     return e, has_news
