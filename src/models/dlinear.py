@@ -69,5 +69,6 @@ class DLinear(nn.Module):
         lambda_c: float,
         lambda_e: float,
         lambda_d: float,
+        **kwargs,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        return compute_pred_loss(output, target, lambda_c, lambda_e, lambda_d)
+        return compute_pred_loss(output, target, lambda_c, lambda_e, lambda_d, **kwargs)

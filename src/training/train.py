@@ -275,6 +275,10 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
     lambda_c = float(loss_cfg.get("lambda_c", 0.0))
     lambda_e = float(loss_cfg.get("lambda_e", 0.0))
     lambda_d = float(loss_cfg.get("lambda_d", 0.0))
+    loss_kind = str(loss_cfg.get("kind", "mse"))
+    huber_delta = float(loss_cfg.get("delta", 1.0))
+    gamma_dir = float(loss_cfg.get("gamma_dir", 0.1))
+    alpha_corr = float(loss_cfg.get("alpha_corr", 0.3))
 
     mlflow_enabled = bool(cfg.train.mlflow.enabled)
     if mlflow_enabled:
@@ -326,7 +330,15 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 if not hasattr(model, "compute_loss"):
                     raise NotImplementedError(f"{type(model).__name__} has no compute_loss")
                 loss, train_metrics = model.compute_loss(
-                    out, y, lambda_c, lambda_e, lambda_d
+                    out,
+                    y,
+                    lambda_c=lambda_c,
+                    lambda_e=lambda_e,
+                    lambda_d=lambda_d,
+                    loss_kind=loss_kind,
+                    huber_delta=huber_delta,
+                    gamma_dir=gamma_dir,
+                    alpha_corr=alpha_corr,
                 )
                 loss.backward()
                 if cfg.train.grad_clip:

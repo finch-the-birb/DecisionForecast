@@ -4,6 +4,10 @@ variant: dlinear
 kernel_size: 25
 
 loss:
+  kind: mse           # mse | huber | directional | correlation | huber_directional
+  delta: 1.0          # for huber
+  gamma_dir: 0.1      # directional penalty weight
+  alpha_corr: 0.3     # correlation penalty weight
   lambda_c: 0.0
   lambda_e: 0.0
   lambda_d: 0.0

@@ -8,6 +8,7 @@ import torch.nn as nn
 from src.models.ablate import apply_feature_ablation
 from src.models.fusion import assert_fusion
 from src.models.head import ForecastHead
+from src.models.outputs import compute_pred_loss
 from src.models.prototypes import PrototypeLosses, PrototypeModule
 from src.models.timexer_backbone import n_patches
 
@@ -142,20 +143,6 @@ class TimeXLModelA(nn.Module):
         lambda_c: float,
         lambda_e: float,
         lambda_d: float,
+        **kwargs,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        l_pred = nn.functional.mse_loss(output.pred, target)
-        pl = output.proto_losses
-        total = (
-            l_pred
-            + lambda_c * pl.l_c
-            + lambda_e * pl.l_e
-            + lambda_d * pl.l_d
-        )
-        metrics = {
-            "loss": float(total.detach()),
-            "l_pred": float(l_pred.detach()),
-            "l_c": float(pl.l_c.detach()),
-            "l_e": float(pl.l_e.detach()),
-            "l_d": float(pl.l_d.detach()),
-        }
-        return total, metrics
+        return compute_pred_loss(output, target, lambda_c, lambda_e, lambda_d, **kwargs)
