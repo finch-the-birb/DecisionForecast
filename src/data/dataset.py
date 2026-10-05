@@ -643,6 +643,46 @@ def _attach_text_series(
         ts.has_news = has_news
 
 
+def _attach_compact_text(
+    cfg: DictConfig,
+    series: dict[str, TickerSeries],
+) -> dict[str, TickerSeries]:
+    """Replace 768D article text with the frozen 15D compact daily cache."""
+    from src.data.selected_pipeline import align_compact_text
+
+    text_dir = Path(str(cfg.data.text_compact_cache_dir))
+    kept: dict[str, TickerSeries] = {}
+    for ticker, ts in series.items():
+        path = text_dir / f"{ticker}.parquet"
+        if not path.is_file():
+            log.warning("Skipping ticker %s: missing compact text %s", ticker, path)
+            continue
+        try:
+            text_seq, has_news, n_missing = align_compact_text(path, ts.dates)
+        except (KeyError, ValueError, OSError) as exc:
+            log.warning("Skipping ticker %s: %s", ticker, exc)
+            continue
+        if text_seq.shape != (len(ts.features), 15):
+            log.warning(
+                "Skipping ticker %s: compact text shape %s does not match %d price rows",
+                ticker,
+                tuple(text_seq.shape),
+                len(ts.features),
+            )
+            continue
+        ts.text_seq = text_seq
+        ts.has_news = has_news
+        kept[ticker] = ts
+        if n_missing:
+            log.info(
+                "Compact text %s zero-filled %d/%d price days",
+                ticker,
+                n_missing,
+                len(ts.dates),
+            )
+    return kept
+
+
 def build_datasets(
     cfg: DictConfig, device: str | torch.device | None = None
 ) -> tuple[FNSPIDForecastDataset, ...]:
@@ -732,7 +772,26 @@ def build_datasets(
                 log.warning("Skipping ticker %s: %s", ticker, exc)
         if not series:
             raise RuntimeError(f"No price series loaded from {store.prices_dir} for {tickers}")
-        if text_enabled:
+        if mode == "ohlcv_compact_text":
+            if normalize != "per_window":
+                raise ValueError("ohlcv_compact_text requires data.normalize=per_window")
+            if [str(column) for column in features] != ["close", "volume", "open", "high", "low"]:
+                raise ValueError(
+                    "ohlcv_compact_text requires features [close, volume, open, high, low], "
+                    f"got {features}"
+                )
+            if text_dim != 15:
+                raise ValueError(f"ohlcv_compact_text requires text.dim 15, got {text_dim}")
+            series = _attach_compact_text(cfg, series)
+            if not series:
+                raise RuntimeError(f"No compact-text series loaded for {tickers}")
+            log.info(
+                "Compact text cache %s tickers=%d dim=%d",
+                cfg.data.text_compact_cache_dir,
+                len(series),
+                text_dim,
+            )
+        elif text_enabled:
             _attach_text_series(cfg, store, series, tickers, train_end, device)
 
     train_idx: list[WindowIndex] = []

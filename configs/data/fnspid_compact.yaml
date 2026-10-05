@@ -1,0 +1,18 @@
+# 5 OHLCV channels from the price files, plus the frozen 15D compact text cache.
+# RevIN stays per window and scales y by the close channel. The 768D FinLang
+# series is not built. cache/text_compact/{ticker}.parquet must already exist.
+defaults:
+  - fnspid
+  - _self_
+
+name: fnspid_compact
+features_mode: ohlcv_compact_text
+features: [close, volume, open, high, low]
+target: close
+normalize: per_window
+text_compact_cache_dir: ${data.root}/cache/text_compact
+
+text:
+  enabled: true
+  dim: 15
+  compact: true

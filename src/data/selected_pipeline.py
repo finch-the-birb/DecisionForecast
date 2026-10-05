@@ -299,6 +299,44 @@ def write_parquet(path: Path, frame: pd.DataFrame) -> None:
     frame.to_parquet(path, index=False)
 
 
+def align_compact_text(
+    path: Path,
+    dates: pd.Series | pd.DatetimeIndex,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Place the frozen 15D daily text on a price calendar.
+
+    Days present in the cache keep their compact vector and ``has_news``.
+    Days the cache does not cover are zeros with ``has_news`` false, so the
+    OHLCV row count stays the price calendar. A cache that overlaps no price
+    day is an error.
+    """
+    frame = pd.read_parquet(path)
+    missing = [column for column in ("date", "has_news", *COMPACT_COLUMNS) if column not in frame.columns]
+    if missing:
+        raise KeyError(f"{path} is missing compact columns {missing}")
+    frame = frame.copy()
+    frame["date"] = _naive_days(frame["date"])
+    frame = frame.drop_duplicates("date", keep="last").set_index("date")
+    wanted = _naive_days(dates)
+    if wanted.has_duplicates:
+        raise ValueError("price dates must be unique before compact-text alignment")
+    present = wanted.isin(frame.index)
+    n_missing = int((~present).sum())
+    if n_missing == len(wanted):
+        raise ValueError(f"{path.name}: compact text does not overlap the price calendar")
+    text = np.zeros((len(wanted), len(COMPACT_COLUMNS)), dtype=np.float32)
+    has_news = np.zeros(len(wanted), dtype=bool)
+    if bool(present.any()):
+        block = frame.loc[wanted[present], list(COMPACT_COLUMNS)].to_numpy(dtype=np.float64)
+        if not np.isfinite(block).all():
+            raise ValueError(f"{path.name}: compact text has non-finite values")
+        text[np.asarray(present)] = block.astype(np.float32)
+        has_news[np.asarray(present)] = (
+            frame.loc[wanted[present], "has_news"].to_numpy(dtype=bool)
+        )
+    return text, has_news, n_missing
+
+
 def load_selected_arrays(
     technical_path: Path,
     text_path: Path,
