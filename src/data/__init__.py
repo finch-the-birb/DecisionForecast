@@ -12,15 +12,23 @@ from src.data.dataset import (
 )
 from src.data.embeddings import TextEmbeddingCache
 from src.data.paths import resolve_data_root
+from src.data.text_compact import (
+    CompactTextState,
+    build_compact_daily_series,
+    fit_compact_state,
+)
 from src.data.text_series import build_daily_series, pool_window
 
 __all__ = [
+    "CompactTextState",
     "FNSPIDForecastDataset",
     "TextEmbeddingCache",
     "TickerDataStore",
     "WindowIndex",
+    "build_compact_daily_series",
     "build_daily_series",
     "build_datasets",
+    "fit_compact_state",
     "forecast_collate",
     "log_text_coverage",
     "make_forecast_loader",
