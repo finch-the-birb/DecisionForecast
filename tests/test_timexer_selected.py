@@ -20,7 +20,7 @@ _FUSION = {
 
 def _model(**overrides) -> TimeXerSelected:
     kwargs = dict(
-        n_features=25,
+        n_features=26,
         seq_len=60,
         horizon=7,
         d_model=32,
@@ -43,7 +43,7 @@ def _model(**overrides) -> TimeXerSelected:
 def test_patch_count_and_head_read_the_last_patch() -> None:
     model = _model()
     assert model.n_patches == n_patches(60, 12, 6) == 9
-    assert model.backbone.patch_embed.value.in_features == 25 * 12
+    assert model.backbone.patch_embed.value.in_features == 26 * 12
     assert model.exo_embed.in_features == 15
     assert model.head.pool == "last"
     assert model.head.net[-1].in_features == 32
@@ -53,7 +53,7 @@ def test_patch_count_and_head_read_the_last_patch() -> None:
 def test_text_changes_the_forecast_with_one_layer() -> None:
     torch.manual_seed(0)
     model = _model()
-    x = torch.randn(4, 60, 25)
+    x = torch.randn(4, 60, 26)
     text_a = torch.randn(4, 60, 15)
     text_b = text_a + 3.0
     pred_a = model(x, text_seq=text_a).pred
@@ -69,7 +69,7 @@ def test_text_changes_the_forecast_with_one_layer() -> None:
 def test_pooled_text_vector_is_one_exogenous_token() -> None:
     torch.manual_seed(1)
     model = _model()
-    x = torch.randn(2, 60, 25)
+    x = torch.randn(2, 60, 26)
     text = torch.randn(2, 15)
     pred = model(x, text=text).pred
     assert pred.shape == (2, 7)
@@ -78,12 +78,12 @@ def test_pooled_text_vector_is_one_exogenous_token() -> None:
 
 
 def test_build_model_reads_the_selected_config() -> None:
-    features = [f"f{i}" for i in range(25)]
+    features = ["close", *[f"f{i}" for i in range(25)]]
     cfg = OmegaConf.create(
         {
             "data": {
                 "features": features,
-                "target": "f0",
+                "target": "close",
                 "lookback_T": 60,
                 "horizon": 7,
                 "patch_len": 12,
@@ -104,6 +104,61 @@ def test_build_model_reads_the_selected_config() -> None:
     )
     model = build_model(cfg)
     assert isinstance(model, TimeXerSelected)
-    assert model.n_features == 25
+    assert model.n_features == 26
     assert model.text_dim == 15
     assert len(model.backbone.layers) == 1
+    assert len(model.global_to_patch) == 1
+
+
+def test_two_layers_each_pass_updated_global_token_to_patches() -> None:
+    torch.manual_seed(2)
+    model = _model(e_layers=2)
+    model.train()
+    assert len(model.backbone.layers) == 2
+    assert len(model.global_to_patch) == 2
+    x = torch.randn(4, 60, 26)
+    text = torch.randn(4, 60, 15, requires_grad=True)
+    pred_a = model(x, text_seq=text).pred
+    pred_b = model(x, text_seq=text.detach() + 3.0).pred
+    assert pred_a.shape == (4, 7)
+    assert not torch.allclose(pred_a, pred_b)
+    pred_a.sum().backward()
+    assert text.grad is not None
+    assert float(text.grad.abs().sum()) > 0.0
+    for bridge in model.global_to_patch:
+        grad_sum = sum(
+            float(param.grad.abs().sum())
+            for param in bridge.parameters()
+            if param.grad is not None
+        )
+        assert grad_sum > 0.0
+
+
+def test_build_model_honors_e_layers_override() -> None:
+    features = ["close", *[f"f{i}" for i in range(25)]]
+    cfg = OmegaConf.create(
+        {
+            "data": {
+                "features": features,
+                "target": "close",
+                "lookback_T": 60,
+                "horizon": 7,
+                "patch_len": 12,
+                "patch_stride": 6,
+            },
+            "model": {
+                "name": "timexer_selected",
+                "d_model": 64,
+                "n_heads": 4,
+                "e_layers": 2,
+                "d_ff": 256,
+                "dropout": 0.0,
+                "text_dim": 15,
+                "fusion": _FUSION,
+                "head": {"type": "linear", "hidden": 128, "dropout": 0.0, "pool": "last"},
+            },
+        }
+    )
+    model = build_model(cfg)
+    assert len(model.backbone.layers) == 2
+    assert len(model.global_to_patch) == 2

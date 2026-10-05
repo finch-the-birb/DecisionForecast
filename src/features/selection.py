@@ -6,11 +6,11 @@ mean absolute TreeSHAP contribution on those same rows. Features are then
 taken in that order until 25 remain, skipping a candidate whose absolute
 Spearman correlation with an already kept feature is above 0.85.
 
-The frozen signature is those 25 technical names plus the 15 compact text
-columns. Text is not ranked by the booster and is not dropped for
-collinearity with the technical block. Rows outside ``train_mask``, and
-train rows that are still in warm-up, do not enter the fit, the SHAP
-average, or the correlation matrix.
+The frozen signature is the price level ``close`` in channel 0, then those
+25 technical names, then the 15 compact text columns. ``close`` is not ranked
+by the booster and is not dropped for collinearity. Text is not ranked either.
+Rows outside ``train_mask``, and train rows that are still in warm-up, do not
+enter the fit, the SHAP average, or the correlation matrix.
 """
 
 from __future__ import annotations
@@ -25,13 +25,15 @@ import pandas as pd
 from src.data.text_compact import COMPACT_COLUMNS
 
 TOP_K = 25
+LEVEL_COLUMN = "close"
+TS_WIDTH = TOP_K + 1
 CORR_THRESHOLD = 0.85
 HUBER_DELTA = 0.5
 
 
 @dataclass(frozen=True)
 class FoldFeatureSignature:
-    """Column order of the 40D fold vector and the train-only importances."""
+    """Column order of the 41D fold vector and the train-only importances."""
 
     ts_columns: tuple[str, ...]
     text_columns: tuple[str, ...]
@@ -78,7 +80,13 @@ def select_fold_features(
     text_set = set(text_names)
     if len(text_set) != len(text_names):
         raise ValueError("text columns must be unique")
-    ts_names = [str(column) for column in frame.columns if column not in text_set]
+    if LEVEL_COLUMN in text_set:
+        raise ValueError(f"{LEVEL_COLUMN} is the pinned price channel, not a text column")
+    ts_names = [
+        str(column)
+        for column in frame.columns
+        if str(column) not in text_set and str(column) != LEVEL_COLUMN
+    ]
     if not ts_names:
         raise ValueError("frame has no technical columns to select from")
     y = np.asarray(target, dtype=np.float64).reshape(-1)
@@ -113,8 +121,15 @@ def select_fold_features(
     )
     corr = spearman_corr(train_x)
     selected = decorrelated_top_k(importances, corr, top_k, corr_threshold)
+    if LEVEL_COLUMN in selected:
+        raise RuntimeError(f"{LEVEL_COLUMN} must stay out of the TreeSHAP ranking")
+    ts_columns = (LEVEL_COLUMN, *selected)
+    if ts_columns[0] != LEVEL_COLUMN or len(ts_columns) != top_k + 1:
+        raise RuntimeError(
+            f"expected {LEVEL_COLUMN} plus {top_k} indicators, got {len(ts_columns)} columns"
+        )
     return FoldFeatureSignature(
-        ts_columns=tuple(selected),
+        ts_columns=ts_columns,
         text_columns=text_names,
         importances=importances.sort_values(ascending=False, kind="mergesort"),
         n_train_rows=int(usable.sum()),

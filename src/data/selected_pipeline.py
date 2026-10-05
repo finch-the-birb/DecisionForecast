@@ -22,7 +22,7 @@ from src.data.text_compact import (
     build_compact_daily_series,
 )
 from src.data.walk_forward import DEFAULT_FOLDS, EMBARGO_BARS, WalkForwardFold
-from src.features.selection import TOP_K, FoldFeatureSignature, select_fold_features
+from src.features.selection import LEVEL_COLUMN, TOP_K, TS_WIDTH, FoldFeatureSignature, select_fold_features
 from src.features.technical import compute_technical_features, technical_feature_names
 
 log = logging.getLogger(__name__)
@@ -255,10 +255,10 @@ def read_signature(path: Path, *, horizon: int, lookback: int) -> dict:
         raise ValueError(f"{path} format is {payload.get('format')!r}, expected {SIGNATURE_FORMAT}")
     ts_columns = [str(name) for name in payload["ts_columns"]]
     text_columns = [str(name) for name in payload["text_columns"]]
-    if len(ts_columns) != TOP_K or text_columns != list(COMPACT_COLUMNS):
+    if len(ts_columns) != TS_WIDTH or ts_columns[0] != LEVEL_COLUMN or text_columns != list(COMPACT_COLUMNS):
         raise ValueError(
-            f"{path} has {len(ts_columns)} technical columns and text {text_columns}; "
-            f"expected {TOP_K} plus {list(COMPACT_COLUMNS)}"
+            f"{path} has technical columns {ts_columns[:1]}… ({len(ts_columns)}) and text {text_columns}; "
+            f"expected {LEVEL_COLUMN} plus {TOP_K} indicators and {list(COMPACT_COLUMNS)}"
         )
     if int(payload["horizon"]) != int(horizon) or int(payload["lookback"]) != int(lookback):
         raise ValueError(
@@ -315,7 +315,8 @@ def load_selected_arrays(
     if train_start is not None:
         merged = merged.loc[merged["date"] >= pd.Timestamp(train_start).normalize()]
     merged = merged.reset_index(drop=True)
-    values = merged.loc[:, list(ts_columns) + ["close"]].to_numpy(dtype=np.float64)
+    level_columns = list(dict.fromkeys([*ts_columns, LEVEL_COLUMN]))
+    values = merged.loc[:, level_columns].to_numpy(dtype=np.float64)
     finite = np.isfinite(values).all(axis=1)
     merged = merged.loc[finite].reset_index(drop=True)
     if len(merged) < 2:

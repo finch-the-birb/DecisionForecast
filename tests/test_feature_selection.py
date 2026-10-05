@@ -104,8 +104,9 @@ def test_selector_ignores_rows_outside_the_train_mask() -> None:
     again = select_fold_features(
         scrambled, scrambled_target, mask, text_columns=(), top_k=1, seed=0, **_FIT
     )
-    assert original.ts_columns == ("signal",)
+    assert original.ts_columns == ("close", "signal")
     assert again.ts_columns == original.ts_columns
+    assert "close" not in original.importances.index
     pd.testing.assert_series_equal(original.importances, again.importances)
     assert original.n_train_rows == n_train
 
@@ -133,7 +134,9 @@ def test_correlation_filter_uses_the_train_split_only() -> None:
     signature = select_fold_features(
         frame, target, mask, text_columns=(), top_k=2, seed=0, **_FIT
     )
-    assert set(signature.ts_columns) == {"a", "b"}
+    assert signature.ts_columns[0] == "close"
+    assert set(signature.ts_columns) == {"close", "a", "b"}
+    assert "close" not in signature.importances.index
 
 
 def test_text_columns_are_excluded_from_the_booster() -> None:
@@ -158,7 +161,8 @@ def test_text_columns_are_excluded_from_the_booster() -> None:
         seed=0,
         **_FIT,
     )
-    assert signature.ts_columns == ("signal",)
+    assert signature.ts_columns == ("close", "signal")
+    assert "close" not in signature.importances.index
     assert "sent_pos" not in signature.importances.index
     assert signature.text_columns == ("sent_pos",)
 
@@ -196,7 +200,7 @@ def test_non_finite_train_rows_are_dropped_and_test_nans_are_ignored() -> None:
     assert ignored.n_train_rows == n_train
 
 
-def test_default_signature_is_25_technical_plus_15_text() -> None:
+def test_default_signature_pins_close_then_25_indicators() -> None:
     rng = np.random.default_rng(4)
     n = 500
     values = rng.normal(size=(n, TOP_K))
@@ -206,15 +210,18 @@ def test_default_signature_is_25_technical_plus_15_text() -> None:
     off_diagonal = spearman_corr(frame).to_numpy()
     np.fill_diagonal(off_diagonal, 0.0)
     assert np.abs(off_diagonal).max() < CORR_THRESHOLD
+    frame["close"] = 100.0 + rng.normal(size=n)
     for name in COMPACT_COLUMNS:
         frame[name] = rng.normal(size=n)
     mask = np.ones(n, dtype=bool)
     signature = select_fold_features(frame, target, mask, seed=0, n_estimators=20, num_leaves=8)
-    assert set(signature.ts_columns) == set(columns)
+    assert signature.ts_columns[0] == "close"
+    assert set(signature.ts_columns[1:]) == set(columns)
+    assert len(signature.ts_columns) == TOP_K + 1
+    assert "close" not in signature.importances.index
     assert signature.text_columns == COMPACT_COLUMNS
-    assert set(signature.columns) == set(columns) | set(COMPACT_COLUMNS)
-    assert signature.columns[:TOP_K] == signature.ts_columns
-    assert len(signature.columns) == TOP_K + COMPACT_DIM
+    assert signature.columns[0] == "close"
+    assert len(signature.columns) == TOP_K + 1 + COMPACT_DIM
     ordered = apply_fold_signature(frame, signature)
     assert list(ordered.columns) == list(signature.columns)
     assert ordered.index.equals(frame.index)

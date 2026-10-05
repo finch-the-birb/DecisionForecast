@@ -1,6 +1,6 @@
-# 25 technical channels + 15D compact text. The 25 names are read from the
-# fold-1 signature when datasets are built. DLinear still uses data=fnspid:
-# it forecasts the close channel inside x.
+# close is channel 0. TreeSHAP adds 25 indicators (26 series channels) and
+# compact text stays 15D. Names are read from the fold-1 signature when
+# datasets are built. Per-window RevIN scales y by channel 0.
 defaults:
   - fnspid
   - _self_

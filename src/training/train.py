@@ -49,9 +49,9 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
         raise ValueError(f"target {target!r} not in features {features}")
     else:
         target_idx = 0
-    if name == "timexer_selected" and (n_features != 25 or int(cfg.model.get("text_dim", 15)) != 15):
+    if name == "timexer_selected" and (n_features != 26 or int(cfg.model.get("text_dim", 15)) != 15):
         raise ValueError(
-            "timexer_selected expects 25 technical channels and text_dim 15, "
+            "timexer_selected expects 26 channels (close plus 25 indicators) and text_dim 15, "
             f"got n_features={n_features} text_dim={int(cfg.model.get('text_dim', 15))}"
         )
     seq_len = int(cfg.data.lookback_T)
@@ -356,7 +356,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     )
                     log.info("First batch tensors on x=%s text=%s", x.device, text.device)
                     if str(cfg.model.name) == "timexer_selected" and (
-                        x.size(-1) != 25
+                        x.size(-1) != 26
                         or text.size(-1) != 15
                         or text_seq.size(-1) != 15
                         or x.size(1) != int(cfg.data.lookback_T)
@@ -364,7 +364,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         raise RuntimeError(
                             "timexer_selected batch "
                             f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)}; "
-                            f"expected [B, {int(cfg.data.lookback_T)}, 25] and text 15"
+                            f"expected [B, {int(cfg.data.lookback_T)}, 26] and text 15"
                         )
                     log_cuda_memory("first train batch")
                 optimizer.zero_grad(set_to_none=True)

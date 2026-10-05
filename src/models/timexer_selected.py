@@ -1,11 +1,10 @@
-"""TimeXer on the frozen 40D fold vector: 25D patches, 15D text through G_en.
+"""TimeXer on the frozen fold vector: close plus 25 indicators, 15D text through G_en.
 
-Phase 4, Sprint 12. Technical channels are ordinary endogenous patches.
-Compact text is the only exogenous input: G_en reads it by cross-attention,
-then the patches read that updated G_en (global-to-patch) in the same layer.
-The forecast head pools the last patch. Raw text is not concatenated onto
-patches or onto the head. There is no TimeXL prototype bank; event prototypes
-already live inside the 15D text block.
+Phase 4. Channel 0 is the close level. The other endogenous channels are the
+TreeSHAP selection. Compact text is the only exogenous input: G_en reads it
+by cross-attention, then the patches read that updated G_en in the same layer.
+The forecast head pools the last patch. ``PatchEmbed`` maps each patch of
+``n_features`` channels; the selected protocol passes 26.
 """
 
 from __future__ import annotations

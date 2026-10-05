@@ -662,9 +662,10 @@ def build_datasets(
     text_dim = int(cfg.data.text.dim)
     _validate_lookback(lookback, int(cfg.data.patch_len), int(cfg.data.patch_stride))
     mode = str(cfg.data.get("features_mode", "ohlcv"))
-    scale_y_from_target = mode == "selected_40d"
+    selected = mode == "selected_40d"
+    scale_y_from_target = False
     series: dict[str, TickerSeries] = {}
-    if scale_y_from_target:
+    if selected:
         if normalize != "per_window":
             raise ValueError("selected_40d requires data.normalize=per_window")
         from src.data.selected_pipeline import load_selected_arrays, read_signature
@@ -676,6 +677,8 @@ def build_datasets(
             cfg.data.features = list(features)
             cfg.data.text.dim = len(text_columns)
         text_dim = len(text_columns)
+        if not features or features[0] != "close":
+            raise ValueError(f"selected signature channel 0 must be close, got {features[:1]}")
         target_idx = 0
         technical_dir = Path(str(cfg.data.technical_cache_dir))
         text_dir = Path(str(cfg.data.text_compact_cache_dir))

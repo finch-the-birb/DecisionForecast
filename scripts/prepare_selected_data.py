@@ -1,4 +1,7 @@
-"""Build the 40D caches for one ticker set.
+"""Build the selected caches for one ticker set.
+
+The numeric block is ``close`` plus the TreeSHAP Top-25 (26 channels). Compact
+text stays 15D. Together that is the 41D fold vector.
 
 Writes, under the FNSPID root:
 

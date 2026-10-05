@@ -148,7 +148,8 @@ def test_selected_batch_reaches_the_model_without_nan_grads(tmp_path) -> None:
         seed=0,
     )
     assert signature.ts_columns == leaked_signature.ts_columns
-    assert len(signature.ts_columns) == 25
+    assert signature.ts_columns[0] == "close"
+    assert len(signature.ts_columns) == 26
     assert len(signature.text_columns) == 15
 
     for ticker, trading_dates, article_dates, vectors, ticker_probs in bundles:
@@ -225,14 +226,26 @@ def test_selected_batch_reaches_the_model_without_nan_grads(tmp_path) -> None:
     assert len(train_ds) == 8 and len(val_ds) == 4 and len(test_ds) == 4
     assert list(cfg.data.features) == list(signature.ts_columns)
     item = train_ds[0]
-    assert item["x"].shape == (60, 25)
+    assert train_ds.target_idx == 0
+    assert train_ds.scale_y_from_target is False
+    assert item["x"].shape == (60, 26)
     assert item["text_seq"].shape == (60, 15)
     assert item["y"].shape == (7,)
+    wi = train_ds.indices[0]
+    series = train_ds.series[wi.ticker]
+    raw_x = series.features[wi.start_idx : wi.end_idx]
+    raw_y = series.target[wi.end_idx : wi.end_idx + 7]
+    assert np.allclose(raw_x[:, 0], series.target[wi.start_idx : wi.end_idx])
+    level_std = float(raw_x[:, 0].std())
+    if level_std < 1e-8:
+        level_std = 1.0
+    expected_y = (raw_y - float(raw_x[:, 0].mean())) / level_std
+    np.testing.assert_allclose(item["y"].numpy(), expected_y, atol=1e-5)
     x = item["x"].numpy()
     assert np.allclose(x.mean(axis=0), 0.0, atol=1e-5)
     loader = make_forecast_loader(train_ds, batch_size=4, shuffle=False, num_workers=0)
     batch = next(iter(loader))
-    assert tuple(batch["x"].shape) == (4, 60, 25)
+    assert tuple(batch["x"].shape) == (4, 60, 26)
     assert tuple(batch["text_seq"].shape) == (4, 60, 15)
     model = build_model(cfg)
     model.eval()
@@ -255,6 +268,6 @@ def test_selected_batch_reaches_the_model_without_nan_grads(tmp_path) -> None:
     for parameter in model.parameters():
         if parameter.grad is not None:
             assert torch.isfinite(parameter.grad).all()
-    assert model.n_features == 25
+    assert model.n_features == 26
     assert model.text_dim == 15
     assert model.n_patches == 9

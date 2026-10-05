@@ -1,7 +1,7 @@
-# TimeXer on the Phase 4 40D vector.
-# 25 technical channels are endogenous patches. 15D compact text is the only
-# exogenous input: G_en reads it, then patches read G_en in the same layer.
-# Head pools the last patch. No TimeXL prototypes.
+# TimeXer on close (channel 0) plus 25 selected indicators, with 15D text.
+# 25 technical channels are endogenous patches together with close.
+# Compact text is the only exogenous input: G_en reads it, then patches read
+# G_en in the same layer. Head pools the last patch. No TimeXL prototypes.
 name: timexer_selected
 variant: timexer_40d
 
