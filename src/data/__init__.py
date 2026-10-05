@@ -18,9 +18,16 @@ from src.data.text_compact import (
     fit_compact_state,
 )
 from src.data.text_series import build_daily_series, pool_window
+from src.data.walk_forward import (
+    DEFAULT_FOLDS,
+    EMBARGO_BARS,
+    walk_forward_splits,
+)
 
 __all__ = [
     "CompactTextState",
+    "DEFAULT_FOLDS",
+    "EMBARGO_BARS",
     "FNSPIDForecastDataset",
     "TextEmbeddingCache",
     "TickerDataStore",
@@ -36,4 +43,5 @@ __all__ = [
     "precache_news_for_tickers",
     "resolve_data_root",
     "split_text_coverage",
+    "walk_forward_splits",
 ]

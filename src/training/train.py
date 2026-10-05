@@ -20,6 +20,7 @@ from src.models.timexer_b import TimeXerB
 from src.models.timexer_c0 import TimeXerC0
 from src.models.timexer_c1 import TimeXerC1
 from src.models.timexer_plain import TimeXerPlain
+from src.models.timexer_selected import TimeXerSelected
 from src.models.timexl_a import TimeXLModelA
 from src.explain.bank import collect_segment_bank
 from src.utils.device import log_cuda_memory, log_torch_device, resolve_device
@@ -157,8 +158,27 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_dropout=head_dropout,
             head_pool=head_pool,
         )
+    if name == "timexer_selected":
+        return TimeXerSelected(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=int(cfg.model.get("text_dim", 15)),
+            fusion=cfg.model.fusion,
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_type=head_type,
+            head_hidden=head_hidden,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
     raise NotImplementedError(
-        f"Model '{name}' not implemented. Use model=a, b, c0, c1, timexer_plain, or dlinear."
+        f"Model '{name}' not implemented. Use model=a, b, c0, c1, timexer_plain, timexer_selected, or dlinear."
     )
 
 
