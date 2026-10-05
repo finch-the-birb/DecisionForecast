@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, open_dict
 from torch.utils.data import Dataset
 
 from src.data.embeddings import TextEmbeddingCache
@@ -280,6 +280,7 @@ class FNSPIDForecastDataset(Dataset):
         renormalize: bool = False,
         normalize: str = "per_ticker_zscore",
         target_idx: int = 0,
+        scale_y_from_target: bool = False,
     ) -> None:
         self.indices = indices
         self.store = store
@@ -292,6 +293,7 @@ class FNSPIDForecastDataset(Dataset):
         self.renormalize = renormalize
         self.normalize = normalize
         self.target_idx = target_idx
+        self.scale_y_from_target = bool(scale_y_from_target)
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -306,8 +308,15 @@ class FNSPIDForecastDataset(Dataset):
             std = raw_x.std(axis=0)
             std = np.where(std < 1e-8, 1.0, std).astype(np.float64)
             x = ((raw_x - mean) / std).astype(np.float32)
-            t_mean = float(mean[self.target_idx])
-            t_std = float(std[self.target_idx])
+            if self.scale_y_from_target:
+                level = np.asarray(ts.target[wi.start_idx : wi.end_idx], dtype=np.float64)
+                t_mean = float(level.mean())
+                t_std = float(np.std(level))
+                if t_std < 1e-8:
+                    t_std = 1.0
+            else:
+                t_mean = float(mean[self.target_idx])
+                t_std = float(std[self.target_idx])
             y = ((raw_y.astype(np.float64) - t_mean) / t_std).astype(np.float32)
             y_mean, y_std = t_mean, t_std
         else:
@@ -652,28 +661,76 @@ def build_datasets(
     text_enabled = bool(cfg.data.text.get("enabled", True))
     text_dim = int(cfg.data.text.dim)
     _validate_lookback(lookback, int(cfg.data.patch_len), int(cfg.data.patch_stride))
-    try:
-        target_idx = [str(f) for f in features].index(target_col)
-    except ValueError as exc:
-        raise ValueError(f"target {target_col!r} not in features {features}") from exc
-
-    store = TickerDataStore(root, str(cfg.data.news_source), features, target_col)
+    mode = str(cfg.data.get("features_mode", "ohlcv"))
+    scale_y_from_target = mode == "selected_40d"
     series: dict[str, TickerSeries] = {}
-    for ticker in tickers:
-        try:
-            series[ticker] = store.get_series(
-                ticker,
-                train_end=train_end,
-                train_start=train_start,
-                normalize=normalize,
-            )
-        except (FileNotFoundError, KeyError, ValueError) as exc:
-            log.warning("Skipping ticker %s: %s", ticker, exc)
-    if not series:
-        raise RuntimeError(f"No price series loaded from {store.prices_dir} for {tickers}")
+    if scale_y_from_target:
+        if normalize != "per_window":
+            raise ValueError("selected_40d requires data.normalize=per_window")
+        from src.data.selected_pipeline import load_selected_arrays, read_signature
 
-    if text_enabled:
-        _attach_text_series(cfg, store, series, tickers, train_end, device)
+        signature = read_signature(Path(str(cfg.data.signature_path)), horizon=horizon, lookback=lookback)
+        features = [str(column) for column in signature["ts_columns"]]
+        text_columns = [str(column) for column in signature["text_columns"]]
+        with open_dict(cfg):
+            cfg.data.features = list(features)
+            cfg.data.text.dim = len(text_columns)
+        text_dim = len(text_columns)
+        target_idx = 0
+        technical_dir = Path(str(cfg.data.technical_cache_dir))
+        text_dir = Path(str(cfg.data.text_compact_cache_dir))
+        store = None
+        for ticker in tickers:
+            technical_path = technical_dir / f"{ticker}.parquet"
+            text_path = text_dir / f"{ticker}.parquet"
+            if not technical_path.is_file() or not text_path.is_file():
+                log.warning("Skipping ticker %s: missing selected cache", ticker)
+                continue
+            try:
+                loaded = load_selected_arrays(
+                    technical_path, text_path, features, text_columns, train_start
+                )
+            except (KeyError, ValueError, OSError) as exc:
+                log.warning("Skipping ticker %s: %s", ticker, exc)
+                continue
+            feat_values, close, dates, text_seq, has_news = loaded
+            series[ticker] = TickerSeries(
+                features=feat_values,
+                target=close,
+                dates=dates,
+                text_seq=text_seq,
+                has_news=has_news,
+            )
+        if not series:
+            raise RuntimeError(f"No selected_40d series loaded for {tickers}")
+        log.info(
+            "Selected signature %s fold=%s train_end=%s technical=%d text=%d",
+            cfg.data.signature_path,
+            signature.get("fold_id"),
+            signature.get("train_end"),
+            len(features),
+            text_dim,
+        )
+    else:
+        try:
+            target_idx = [str(f) for f in features].index(target_col)
+        except ValueError as exc:
+            raise ValueError(f"target {target_col!r} not in features {features}") from exc
+        store = TickerDataStore(root, str(cfg.data.news_source), features, target_col)
+        for ticker in tickers:
+            try:
+                series[ticker] = store.get_series(
+                    ticker,
+                    train_end=train_end,
+                    train_start=train_start,
+                    normalize=normalize,
+                )
+            except (FileNotFoundError, KeyError, ValueError) as exc:
+                log.warning("Skipping ticker %s: %s", ticker, exc)
+        if not series:
+            raise RuntimeError(f"No price series loaded from {store.prices_dir} for {tickers}")
+        if text_enabled:
+            _attach_text_series(cfg, store, series, tickers, train_end, device)
 
     train_idx: list[WindowIndex] = []
     val_idx: list[WindowIndex] = []
@@ -713,6 +770,7 @@ def build_datasets(
         renormalize=bool(cfg.data.text.get("renormalize", False)),
         normalize=normalize,
         target_idx=target_idx,
+        scale_y_from_target=scale_y_from_target,
     )
     train_ds = FNSPIDForecastDataset(_cap(train_idx, cfg.train.max_train_windows), **common)
     val_ds = FNSPIDForecastDataset(_cap(val_idx, cfg.train.max_val_windows), **common)

@@ -38,11 +38,22 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
     n_features = len(cfg.data.features)
     features = [str(f) for f in cfg.data.features]
     target = str(cfg.data.target)
-    try:
-        target_idx = features.index(target)
-    except ValueError as exc:
-        raise ValueError(f"target {target!r} not in features {features}") from exc
     name = str(cfg.model.name)
+    if target in features:
+        target_idx = features.index(target)
+    elif name == "dlinear":
+        raise ValueError(
+            f"target {target!r} not in features; DLinear reads that channel from x. Use data=fnspid."
+        )
+    elif str(cfg.data.get("features_mode", "ohlcv")) != "selected_40d":
+        raise ValueError(f"target {target!r} not in features {features}")
+    else:
+        target_idx = 0
+    if name == "timexer_selected" and (n_features != 25 or int(cfg.model.get("text_dim", 15)) != 15):
+        raise ValueError(
+            "timexer_selected expects 25 technical channels and text_dim 15, "
+            f"got n_features={n_features} text_dim={int(cfg.model.get('text_dim', 15))}"
+        )
     seq_len = int(cfg.data.lookback_T)
     head_cfg = cfg.model.get("head", {})
     head_type = str(head_cfg.get("type", "linear"))
@@ -344,6 +355,17 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         tuple(text_seq.shape),
                     )
                     log.info("First batch tensors on x=%s text=%s", x.device, text.device)
+                    if str(cfg.model.name) == "timexer_selected" and (
+                        x.size(-1) != 25
+                        or text.size(-1) != 15
+                        or text_seq.size(-1) != 15
+                        or x.size(1) != int(cfg.data.lookback_T)
+                    ):
+                        raise RuntimeError(
+                            "timexer_selected batch "
+                            f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)}; "
+                            f"expected [B, {int(cfg.data.lookback_T)}, 25] and text 15"
+                        )
                     log_cuda_memory("first train batch")
                 optimizer.zero_grad(set_to_none=True)
                 out = model(x, text, text_seq=text_seq)
