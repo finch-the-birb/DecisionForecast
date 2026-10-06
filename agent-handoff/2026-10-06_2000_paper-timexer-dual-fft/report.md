@@ -2,10 +2,10 @@
 
 - authored_by: runner
 - created_at: 2026-10-06T17:34:45Z
-- updated_at: 2026-10-06T22:24:36Z
+- updated_at: 2026-10-06T23:09:41Z
 - request_folder: agent-handoff/2026-10-06_2000_paper-timexer-dual-fft/
 - tested_ref: feat/phase2-timexer@33e4a41d2493381cbc72c88635a3a1ebf09641e1
-- status: partial (Block 2/4, 22/48 jobs completed)
+- status: partial (Block 3/4, 25/48 jobs completed)
 
 ## Commands executed
 ```bash
@@ -14,12 +14,12 @@
 ```
 
 ## Outcome
-- exit_code: in progress; Block 1 DONE at 2026-10-06T20:19:01Z; 22/48 DONE; `SWEEP_DONE` absent; no Traceback
+- exit_code: in progress; Block 1 DONE at 2026-10-06T20:19:01Z; Block 2 DONE at 2026-10-06T22:59:52Z; 25/48 DONE; `SWEEP_DONE` absent; no Traceback
 - host: runpod pod `sw7txpqcwtk7tz` (hostname `86df0010ddba`)
-- device: all 22 finished jobs `train device: cuda`, `DataLoader num_workers=4`. No OOM.
+- device: all 25 finished jobs `train device: cuda`, `DataLoader num_workers=4`. No OOM.
 - pid: 2777
 - log: `outputs/paper-timexer-dual-fft.log`
-- current_job: Block 2, stride=6, d_model=128, e_layers=2, use_prototypes=true, seed=1 (started 2026-10-06T22:22:09Z)
+- current_job: Block 3, stride=12, d_model=64, e_layers=1, use_prototypes=false, seed=1 (started 2026-10-06T23:07:01Z)
 - splits: train 98236 / val 12048 / test 11904
 - first-batch shapes: `x=(32, 60, 5)`, `text_seq=(32, 60, 15)`
 - skipped price files: UNH, VZ
@@ -51,8 +51,11 @@
 | 6 | 128 | 2 | false | 1 | 6 | 98236 | 12048 | 11904 | (32, 60, 5) | (32, 60, 15) | 938123 | 0.7065 | 0.7882 | 0.6142 |
 | 6 | 128 | 2 | false | 2 | 8 | 98236 | 12048 | 11904 | (32, 60, 5) | (32, 60, 15) | 938123 | 0.7511 | 0.7773 | 0.6067 |
 | 6 | 128 | 2 | true | 0 | 20 | 98236 | 12048 | 11904 | (32, 60, 5) | (32, 60, 15) | 955915 | 0.7026 | 0.7622 | 0.5990 |
+| 6 | 128 | 2 | true | 1 | 11 | 98236 | 12048 | 11904 | (32, 60, 5) | (32, 60, 15) | 955915 | 0.7022 | 0.7962 | 0.6218 |
+| 6 | 128 | 2 | true | 2 | 20 | 98236 | 12048 | 11904 | (32, 60, 5) | (32, 60, 15) | 955915 | 0.7080 | 0.7723 | 0.6043 |
+| 12 | 64 | 1 | false | 0 | 7 | 98236 | 12048 | 11904 | (32, 60, 5) | (32, 60, 15) | 122761 | 0.7175 | 0.7615 | 0.5982 |
 
-Means n=3, sample std. Incomplete configs are omitted (Block 2, e=2, prototypes: 1/3 seeds).
+Means n=3, sample std. Incomplete configs are omitted (Block 3, e=1, no prototypes: 1/3 seeds).
 
 | stride | d_model | e_layers | use_proto | n_params | best_val_mse | test_mse | test_mae |
 | 6 | 64 | 1 | false | 122761 | 0.7251±0.0072 | 0.7665±0.0046 | 0.6020±0.0026 |
@@ -62,6 +65,7 @@ Means n=3, sample std. Incomplete configs are omitted (Block 2, e=2, prototypes:
 | 6 | 128 | 1 | false | 474889 | 0.7257±0.0211 | 0.7683±0.0020 | 0.6018±0.0008 |
 | 6 | 128 | 1 | true | 492681 | 0.7095±0.0061 | 0.7765±0.0206 | 0.6066±0.0104 |
 | 6 | 128 | 2 | false | 938123 | 0.7300±0.0224 | 0.7838±0.0057 | 0.6113±0.0040 |
+| 6 | 128 | 2 | true | 955915 | 0.7043±0.0032 | 0.7769±0.0175 | 0.6084±0.0119 |
 
 - oom: no
 - traceback_summary: n/a
@@ -70,7 +74,7 @@ Means n=3, sample std. Incomplete configs are omitted (Block 2, e=2, prototypes:
 - train_log: `outputs/paper-timexer-dual-fft.log`
 
 ## Conclusions for Dev
-1. Block 2 (stride=6, d_model=128) has 10/12 jobs done. 22/48 overall. Current job is e=2, prototypes on, seed=1. One seed remains after it.
-2. Complete Block 2 configs do not beat DLinear test 0.7535. e=1 no prototypes: 0.7683±0.0020. e=1 with prototypes: 0.7765±0.0206. e=2 no prototypes: 0.7838±0.0057. Wider d_model does not beat d_model=64 e=1 no prototypes (0.7665). e=2 is worse than e=1 on test.
-3. Best single seed so far is d_model=128, e=1, prototypes, seed=1: test 0.7555 (stop_ep 20). Still above 0.7535. The same config's seed=0 is 0.7967, so the mean stays at 0.7765.
-4. e=2 with prototypes has only seed=0 (stop_ep 20, best_val 0.7026, test 0.7622). Mean waits on seeds 1 and 2.
+1. Block 2 is complete (22:59:52Z). 25/48 overall. Block 3 (stride=12, d_model=64) has 1/12 jobs done. Current job is e=1, no prototypes, seed=1.
+2. Last Block 2 config, e=2 with prototypes: test 0.7769±0.0175. Prototypes lower best_val versus the same depth without them (0.7043 vs 0.7300) and improve test only versus that no-prototype pair (0.7838). The mean stays above e=1 at d_model=64 (0.7665) and above DLinear 0.7535. Seed 1 of this config is 0.7962.
+3. First stride=12 job (e=1, no prototypes, seed=0) has test 0.7615. That is the best single seed in Block 3 so far and slightly under the stride=6 e=1 no-prototype mean (0.7665), still above 0.7535. Mean waits on seeds 1 and 2.
+4. No complete config beats DLinear test 0.7535. Best single seed remains d_model=128, e=1, prototypes, seed=1: test 0.7555.
