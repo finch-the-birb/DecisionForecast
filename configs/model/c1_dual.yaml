@@ -1,0 +1,38 @@
+# Dual-token TimeXer. Patches are 5 OHLCV plus 6 close-price rFFT bins.
+# G_text reads 15D compact text. G_ts reads exogenous indicators when
+# n_ts_features > 0. The two tokens cannot attend to each other.
+name: c1_dual
+variant: timexer_dual
+
+fusion:
+  kind: c1_dual
+  text_at_head: false
+  text_to_patches: false
+  text_as_exogenous: true
+  global_to_patch: true
+
+d_model: 64
+n_heads: 4
+e_layers: 1
+dropout: 0.1
+text_dim: 15
+n_ts_features: 0
+
+use_prototypes: false
+n_prototypes: 10
+d_min: 0.5
+
+head:
+  pool: last
+  type: linear
+  hidden: 128
+  dropout: 0.0
+
+loss:
+  kind: huber
+  delta: 0.5
+  lambda_c: 0.1
+  lambda_e: 0.1
+  lambda_d: 0.01
+  gamma_dir: 0.0
+  alpha_corr: 0.0

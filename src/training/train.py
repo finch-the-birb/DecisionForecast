@@ -20,6 +20,7 @@ from src.models.timexer_b import TimeXerB
 from src.models.timexer_c0 import TimeXerC0
 from src.models.timexer_c1 import TimeXerC1
 from src.models.timexer_c1_compact import TimeXerC1Compact
+from src.models.timexer_dual import TimeXerDual
 from src.models.timexer_plain import TimeXerPlain
 from src.models.timexer_selected import TimeXerSelected
 from src.models.timexl_a import TimeXLModelA
@@ -170,6 +171,37 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_dropout=head_dropout,
             head_pool=head_pool,
         )
+    if name == "c1_dual":
+        text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
+        if n_features != 5 or text_dim != 15:
+            raise ValueError(
+                "c1_dual expects 5 OHLCV channels and text_dim 15, "
+                f"got n_features={n_features} text_dim={text_dim}"
+            )
+        d_model = int(cfg.model.d_model)
+        return TimeXerDual(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=d_model,
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=text_dim,
+            fusion=cfg.model.fusion,
+            n_ts_features=int(cfg.model.get("n_ts_features", 0)),
+            close_idx=features.index("close") if "close" in features else 0,
+            use_prototypes=bool(cfg.model.get("use_prototypes", False)),
+            n_prototypes=int(cfg.model.get("n_prototypes", 10)),
+            d_min=float(cfg.model.get("d_min", 0.5)),
+            d_ff=int(cfg.model.get("d_ff", 4 * d_model)),
+            head_type=head_type,
+            head_hidden=head_hidden,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
     if name == "c1_compact":
         text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
         if n_features != 5 or text_dim != 15:
@@ -218,7 +250,9 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_pool=head_pool,
         )
     raise NotImplementedError(
-        f"Model '{name}' not implemented. Use model=a, b, c0, c1, c1_compact, timexer_plain, timexer_selected, or dlinear."
+        "Model "
+        f"'{name}' not implemented. Use model=a, b, c0, c1, c1_compact, c1_dual, "
+        "timexer_plain, timexer_selected, or dlinear."
     )
 
 
@@ -384,6 +418,17 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         tuple(text_seq.shape),
                     )
                     log.info("First batch tensors on x=%s text=%s", x.device, text.device)
+                    if str(cfg.model.name) == "c1_dual" and (
+                        x.size(-1) != 5
+                        or text.size(-1) != 15
+                        or text_seq.size(-1) != 15
+                        or x.size(1) != int(cfg.data.lookback_T)
+                    ):
+                        raise RuntimeError(
+                            "c1_dual batch "
+                            f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)}; "
+                            f"expected [B, {int(cfg.data.lookback_T)}, 5] and text 15"
+                        )
                     if str(cfg.model.name) == "c1_compact" and (
                         x.size(-1) != 5
                         or text.size(-1) != 15

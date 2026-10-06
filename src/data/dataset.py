@@ -11,6 +11,7 @@ from omegaconf import DictConfig, open_dict
 from torch.utils.data import Dataset
 
 from src.data.embeddings import TextEmbeddingCache
+from src.data.selective_norm import apply_static_and_robust, feature_roles, selective_window
 from src.data.paths import local_news_path, local_prices_dir, resolve_data_root
 from src.data.text_series import (
     compute_train_mu,
@@ -160,8 +161,20 @@ def _load_ticker_series(
             target=target_raw.astype(np.float32),
             dates=dates,
         )
+    if normalize == "selective":
+        train_mask = np.ones(len(df), dtype=bool)
+        if train_end is not None:
+            train_mask &= (dates <= train_end).to_numpy()
+        if int(train_mask.sum()) < 1:
+            raise ValueError(f"{ticker}: no train rows for selective scaling")
+        scaled = apply_static_and_robust(feat_values, feat_cols, train_mask)
+        return TickerSeries(
+            features=scaled.astype(np.float32),
+            target=target_raw.astype(np.float32),
+            dates=dates,
+        )
     if normalize != "per_ticker_zscore":
-        raise ValueError(f"normalize={normalize!r}; expected per_window|per_ticker_zscore")
+        raise ValueError(f"normalize={normalize!r}; expected per_window|per_ticker_zscore|selective")
     train_mask = np.ones(len(df), dtype=bool)
     if train_end is not None:
         train_mask &= (dates <= train_end).to_numpy()
@@ -281,6 +294,8 @@ class FNSPIDForecastDataset(Dataset):
         normalize: str = "per_ticker_zscore",
         target_idx: int = 0,
         scale_y_from_target: bool = False,
+        feature_roles: tuple[str, ...] | None = None,
+        close_idx: int | None = None,
     ) -> None:
         self.indices = indices
         self.store = store
@@ -294,6 +309,8 @@ class FNSPIDForecastDataset(Dataset):
         self.normalize = normalize
         self.target_idx = target_idx
         self.scale_y_from_target = bool(scale_y_from_target)
+        self.feature_roles = None if feature_roles is None else tuple(feature_roles)
+        self.close_idx = self.target_idx if close_idx is None else int(close_idx)
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -319,6 +336,11 @@ class FNSPIDForecastDataset(Dataset):
                 t_std = float(std[self.target_idx])
             y = ((raw_y.astype(np.float64) - t_mean) / t_std).astype(np.float32)
             y_mean, y_std = t_mean, t_std
+        elif self.normalize == "selective":
+            if not self.feature_roles:
+                raise RuntimeError("normalize=selective requires feature_roles")
+            x, y_mean, y_std = selective_window(raw_x, self.feature_roles, self.close_idx)
+            y = ((raw_y.astype(np.float64) - y_mean) / y_std).astype(np.float32)
         else:
             x = np.asarray(raw_x, dtype=np.float32)
             y = np.asarray(raw_y, dtype=np.float32)
@@ -773,8 +795,8 @@ def build_datasets(
         if not series:
             raise RuntimeError(f"No price series loaded from {store.prices_dir} for {tickers}")
         if mode == "ohlcv_compact_text":
-            if normalize != "per_window":
-                raise ValueError("ohlcv_compact_text requires data.normalize=per_window")
+            if normalize not in {"per_window", "selective"}:
+                raise ValueError("ohlcv_compact_text requires data.normalize=per_window or selective")
             if [str(column) for column in features] != ["close", "volume", "open", "high", "low"]:
                 raise ValueError(
                     "ohlcv_compact_text requires features [close, volume, open, high, low], "
@@ -833,6 +855,8 @@ def build_datasets(
         normalize=normalize,
         target_idx=target_idx,
         scale_y_from_target=scale_y_from_target,
+        feature_roles=feature_roles([str(column) for column in features]) if normalize == "selective" else None,
+        close_idx=features.index("close") if normalize == "selective" and "close" in [str(column) for column in features] else target_idx,
     )
     train_ds = FNSPIDForecastDataset(_cap(train_idx, cfg.train.max_train_windows), **common)
     val_ds = FNSPIDForecastDataset(_cap(val_idx, cfg.train.max_val_windows), **common)

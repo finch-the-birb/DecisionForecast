@@ -7,6 +7,7 @@ from src.models.timexer_b import TimeXerB
 from src.models.timexer_c0 import TimeXerC0
 from src.models.timexer_c1 import TimeXerC1
 from src.models.timexer_c1_compact import TimeXerC1Compact
+from src.models.timexer_dual import TimeXerDual
 from src.models.timexer_plain import TimeXerPlain
 from src.models.timexer_selected import TimeXerSelected
 from src.models.timexl_a import TimeXLModelA
@@ -23,6 +24,7 @@ __all__ = [
     "TimeXerC0",
     "TimeXerC1",
     "TimeXerC1Compact",
+    "TimeXerDual",
     "TimeXerPlain",
     "TimeXerSelected",
 ]
