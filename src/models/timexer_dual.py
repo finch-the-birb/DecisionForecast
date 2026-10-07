@@ -14,6 +14,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from src.models.ablate import apply_feature_ablation
 from src.models.fft_patch import PatchFFT
 from src.models.fusion import assert_fusion
 from src.models.head import ForecastHead
@@ -192,6 +193,9 @@ class TimeXerDual(nn.Module):
         text: torch.Tensor | None = None,
         text_seq: torch.Tensor | None = None,
         ts: torch.Tensor | None = None,
+        proto_mode: str = "none",
+        text_mode: str = "none",
+        ablation_generator: torch.Generator | None = None,
         **_kwargs,
     ) -> ModelOutput:
         del _kwargs
@@ -203,7 +207,10 @@ class TimeXerDual(nn.Module):
                 f"[B, T, {self.n_ts_features}] or [B, {self.n_ts_features}]"
             )
         patches = self._embed_patches(x)
-        text_exo = self.g_text(_exo_sequence(text, text_seq, self.text_dim))
+        text_in = _exo_sequence(text, text_seq, self.text_dim)
+        if text_mode != "none":
+            text_in = apply_feature_ablation(text_in, text_mode, ablation_generator)
+        text_exo = self.g_text(text_in)
         g_text = text_exo.mean(dim=1, keepdim=True)
         ts_exo = self._project_ts(ts, x.size(0), x.device, x.dtype)
         g_ts = ts_exo.mean(dim=1, keepdim=True) if ts_exo is not None else self.ts_token.expand(x.size(0), -1, -1)
@@ -212,11 +219,14 @@ class TimeXerDual(nn.Module):
         for layer in self.layers:
             tokens = layer(tokens, text_exo, ts_exo, mask)
         patches, g_ts, g_text = _split_tokens(tokens)
+        bank = patches
         proto_losses: PrototypeLosses | None = None
         if self.use_prototypes:
-            patches, proto_losses = self.prototype_block(patches)
+            patches, proto_losses = self.prototype_block(
+                patches, proto_mode=proto_mode, ablation_generator=ablation_generator
+            )
         pred = self.head(patches, g_en=g_text)
-        return ModelOutput(pred=pred, proto_losses=proto_losses, segments=patches)
+        return ModelOutput(pred=pred, proto_losses=proto_losses, segments=bank)
 
     def compute_loss(
         self,

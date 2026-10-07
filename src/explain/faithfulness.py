@@ -42,6 +42,8 @@ def _eval_variant(
         y = batch["y"].to(device)
         text = batch["text"].to(device)
         text_seq = batch["text_seq"].to(device)
+        ts = batch["ts"].to(device) if "ts" in batch and batch["ts"] is not None else None
+        kwargs = {"ts": ts} if ts is not None else {}
         out = model(
             x,
             text,
@@ -49,6 +51,7 @@ def _eval_variant(
             proto_mode=proto_mode,
             text_mode=text_mode,
             ablation_generator=generator,
+            **kwargs,
         )
         pred = out.pred
         preds.append(pred.cpu())

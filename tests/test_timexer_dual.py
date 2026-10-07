@@ -11,11 +11,13 @@ import pandas as pd
 import pytest
 import torch
 from hydra import compose, initialize_config_dir
+from torch.utils.data import DataLoader
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 
 from src.data.collate import forecast_collate
 from src.data.dataset import build_datasets
+from src.explain.bank import collect_segment_bank
 from src.data.text_compact import COMPACT_COLUMNS
 from src.models.timexer_backbone import n_patches
 from src.models.timexer_dual import TimeXerDual, dual_attention_mask
@@ -363,3 +365,41 @@ def test_dual_ts_dataset_returns_normalized_indicator_windows(tmp_path: Path) ->
     output = model(batch["x"], batch["text"], text_seq=batch["text_seq"], ts=batch["ts"])
     assert output.pred.shape == (2, 7)
     assert torch.isfinite(output.pred).all()
+
+
+def test_dual_ts_collect_segment_bank_and_kmeans_init() -> None:
+    torch.manual_seed(0)
+    d_model = 64
+    model = _model(
+        n_features=2,
+        n_ts_features=25,
+        use_prototypes=True,
+        d_model=d_model,
+        dropout=0.0,
+    )
+    items = []
+    for end_idx in range(4):
+        items.append(
+            {
+                "x": torch.randn(60, 2),
+                "y": torch.randn(7),
+                "text": torch.randn(15),
+                "text_seq": torch.randn(60, 15),
+                "ts": torch.randn(60, 25),
+                "has_news_frac": torch.tensor(1.0),
+                "y_mean": torch.tensor(0.0),
+                "y_std": torch.tensor(1.0),
+                "ticker": "AAA",
+                "end_idx": end_idx,
+                "end_date": "2021-01-04",
+            }
+        )
+    loader = DataLoader(items, batch_size=2, collate_fn=forecast_collate)
+    bank, _meta = collect_segment_bank(model, loader)
+    assert bank.ndim == 2
+    assert bank.size(0) >= model.proto.prototypes.size(0)
+    assert bank.size(1) == d_model
+    assert torch.isfinite(bank).all()
+    model.proto.init_from_bank(bank)
+    assert model.proto.prototypes.shape == (10, d_model)
+    assert torch.isfinite(model.proto.prototypes).all()

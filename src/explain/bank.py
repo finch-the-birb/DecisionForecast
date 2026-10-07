@@ -24,7 +24,9 @@ def collect_segment_bank(
         x = batch["x"].to(device)
         text = batch["text"].to(device)
         text_seq = batch["text_seq"].to(device)
-        out = model(x, text, text_seq=text_seq)
+        ts = batch["ts"].to(device) if "ts" in batch and batch["ts"] is not None else None
+        kwargs = {"ts": ts} if ts is not None else {}
+        out = model(x, text, text_seq=text_seq, **kwargs)
         segs = out.segments
         chunks.append(segs.reshape(-1, segs.size(-1)).detach().cpu())
         for i in range(len(batch["ticker"])):
