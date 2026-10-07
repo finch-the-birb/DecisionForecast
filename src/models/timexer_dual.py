@@ -1,10 +1,10 @@
-"""Dual-token TimeXer: OHLCV patches plus patch rFFT, text and indicators isolated.
+"""Dual-token TimeXer: endogenous patches plus patch rFFT, text and indicators isolated.
 
-Patches are ``Linear(5 * patch_len + 6, d_model)``. ``G_ts`` and ``G_text`` sit
-after the patches. Self-attention lets patches see both tokens and blocks the
-tokens from attending to each other. Each token then reads only its own
-exogenous sequence. A zero-initialized gate writes both tokens back into the
-patches.
+Patches are ``Linear(n_features * patch_len + 6, d_model)`` with ``n_features``
+in ``{1, 2, 5}``. ``G_ts`` and ``G_text`` sit after the patches. Self-attention
+lets patches see both tokens and blocks the tokens from attending to each other.
+``G_ts`` then cross-attends to the projected indicator sequence. A zero-initialized
+gate writes both tokens back into the patches.
 """
 
 from __future__ import annotations
@@ -133,12 +133,12 @@ class TimeXerDual(nn.Module):
         super().__init__()
         if e_layers < 1:
             raise ValueError("e_layers must be >= 1")
-        if n_features != 5:
-            raise ValueError(f"TimeXerDual expects 5 OHLCV channels, got {n_features}")
+        if int(n_features) not in (1, 2, 5):
+            raise ValueError(f"TimeXerDual expects 1, 2, or 5 endogenous channels, got {n_features}")
         if text_dim != 15:
             raise ValueError(f"TimeXerDual expects text_dim 15, got {text_dim}")
-        if not 0 <= int(close_idx) < 5:
-            raise ValueError("close_idx must point at one of the 5 OHLCV channels")
+        if not 0 <= int(close_idx) < int(n_features):
+            raise ValueError("close_idx must point at one endogenous channel")
         self.fusion = assert_fusion(
             fusion,
             kind="c1_dual",
@@ -147,7 +147,7 @@ class TimeXerDual(nn.Module):
             text_as_exogenous=True,
             global_to_patch=True,
         )
-        self.n_features = 5
+        self.n_features = int(n_features)
         self.text_dim = 15
         self.n_ts_features = int(n_ts_features)
         self.close_idx = int(close_idx)
@@ -156,7 +156,7 @@ class TimeXerDual(nn.Module):
         self.patch_stride = int(patch_stride)
         self.n_patches = n_patches(seq_len, self.patch_len, self.patch_stride)
         d_ff = int(d_ff) if d_ff is not None else 4 * int(d_model)
-        patch_in = 5 * self.patch_len + 6
+        patch_in = self.n_features * self.patch_len + 6
         self.patch_proj = nn.Linear(patch_in, d_model)
         self.fft = PatchFFT()
         self.g_text = nn.Linear(self.text_dim, d_model)
@@ -196,7 +196,12 @@ class TimeXerDual(nn.Module):
     ) -> ModelOutput:
         del _kwargs
         if x.size(-1) != self.n_features:
-            raise ValueError(f"expected {self.n_features} OHLCV channels, got {x.size(-1)}")
+            raise ValueError(f"expected {self.n_features} endogenous channels, got {x.size(-1)}")
+        if self.n_ts_features > 0 and ts is None:
+            raise ValueError(
+                f"TimeXerDual with n_ts_features={self.n_ts_features} requires ts "
+                f"[B, T, {self.n_ts_features}] or [B, {self.n_ts_features}]"
+            )
         patches = self._embed_patches(x)
         text_exo = self.g_text(_exo_sequence(text, text_seq, self.text_dim))
         g_text = text_exo.mean(dim=1, keepdim=True)

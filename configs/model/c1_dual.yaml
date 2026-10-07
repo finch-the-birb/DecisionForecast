@@ -1,6 +1,7 @@
-# Dual-token TimeXer. Patches are 5 OHLCV plus 6 close-price rFFT bins.
-# G_text reads 15D compact text. G_ts reads exogenous indicators when
-# n_ts_features > 0. The two tokens cannot attend to each other.
+# Dual-token TimeXer. Patches are F endogenous channels plus 6 close-price rFFT bins.
+# F is 1 ([close]), 2 ([close, volume]), or 5 (OHLCV). n_features must match
+# len(data.features). G_text reads 15D compact text. G_ts cross-attends to the
+# indicator sequence when n_ts_features > 0. The two tokens cannot attend to each other.
 name: c1_dual
 variant: timexer_dual
 
@@ -16,6 +17,7 @@ n_heads: 4
 e_layers: 1
 dropout: 0.1
 text_dim: 15
+n_features: 5
 n_ts_features: 0
 
 use_prototypes: false

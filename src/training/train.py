@@ -173,10 +173,21 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
         )
     if name == "c1_dual":
         text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
-        if n_features != 5 or text_dim != 15:
+        if n_features not in (1, 2, 5) or text_dim != 15:
             raise ValueError(
-                "c1_dual expects 5 OHLCV channels and text_dim 15, "
+                "c1_dual expects 1, 2, or 5 endogenous channels and text_dim 15, "
                 f"got n_features={n_features} text_dim={text_dim}"
+            )
+        declared = cfg.model.get("n_features", None)
+        if declared is not None and int(declared) != n_features:
+            raise ValueError(
+                f"model.n_features={int(declared)} does not match {n_features} data channels"
+            )
+        n_ts_features = int(cfg.model.get("n_ts_features", 0))
+        if str(cfg.data.get("features_mode", "")) == "dual_ts" and n_ts_features != 25:
+            raise ValueError(
+                "data=fnspid_dual_ts requires model.n_ts_features=25, "
+                f"got {n_ts_features}"
             )
         d_model = int(cfg.model.d_model)
         return TimeXerDual(
@@ -191,7 +202,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             dropout=float(cfg.model.dropout),
             text_dim=text_dim,
             fusion=cfg.model.fusion,
-            n_ts_features=int(cfg.model.get("n_ts_features", 0)),
+            n_ts_features=n_ts_features,
             close_idx=features.index("close") if "close" in features else 0,
             use_prototypes=bool(cfg.model.get("use_prototypes", False)),
             n_prototypes=int(cfg.model.get("n_prototypes", 10)),
@@ -256,6 +267,35 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
     )
 
 
+def _forecast_inputs(
+    batch: dict, device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    ts = batch.get("ts")
+    if isinstance(ts, torch.Tensor):
+        ts = ts.to(device)
+    else:
+        ts = None
+    return (
+        batch["x"].to(device),
+        batch["y"].to(device),
+        batch["text"].to(device),
+        batch["text_seq"].to(device),
+        ts,
+    )
+
+
+def _forecast_forward(
+    model: torch.nn.Module,
+    x: torch.Tensor,
+    text: torch.Tensor,
+    text_seq: torch.Tensor,
+    ts: torch.Tensor | None,
+):
+    if ts is None:
+        return model(x, text, text_seq=text_seq)
+    return model(x, text, text_seq=text_seq, ts=ts)
+
+
 @torch.no_grad()
 def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> dict[str, float]:
     model.eval()
@@ -264,11 +304,8 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
     y_means: list[torch.Tensor] = []
     y_stds: list[torch.Tensor] = []
     for batch in loader:
-        x = batch["x"].to(device)
-        y = batch["y"].to(device)
-        text = batch["text"].to(device)
-        text_seq = batch["text_seq"].to(device)
-        out = model(x, text, text_seq=text_seq)
+        x, y, text, text_seq, ts = _forecast_inputs(batch, device)
+        out = _forecast_forward(model, x, text, text_seq, ts)
         pred = out.pred
         preds.append(pred.cpu())
         targets.append(y.cpu())
@@ -402,33 +439,42 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             sum_l_d = 0.0
             n_batches = 0
             for batch in train_loader:
-                x = batch["x"].to(device)
-                y = batch["y"].to(device)
-                text = batch["text"].to(device)
-                text_seq = batch["text_seq"].to(device)
+                x, y, text, text_seq, ts = _forecast_inputs(batch, device)
                 if n_batches == 0:
                     log.info(
                         "First batch text L2 mean=%.4f (0 means empty/zero embeddings)",
                         float(text.norm(dim=-1).mean()),
                     )
                     log.info(
-                        "First batch shapes x=%s text=%s text_seq=%s",
+                        "First batch shapes x=%s text=%s text_seq=%s ts=%s",
                         tuple(x.shape),
                         tuple(text.shape),
                         tuple(text_seq.shape),
+                        None if ts is None else tuple(ts.shape),
                     )
                     log.info("First batch tensors on x=%s text=%s", x.device, text.device)
-                    if str(cfg.model.name) == "c1_dual" and (
-                        x.size(-1) != 5
-                        or text.size(-1) != 15
-                        or text_seq.size(-1) != 15
-                        or x.size(1) != int(cfg.data.lookback_T)
-                    ):
-                        raise RuntimeError(
-                            "c1_dual batch "
-                            f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)}; "
-                            f"expected [B, {int(cfg.data.lookback_T)}, 5] and text 15"
+                    if str(cfg.model.name) == "c1_dual":
+                        expected_c = len([str(column) for column in cfg.data.features])
+                        lookback = int(cfg.data.lookback_T)
+                        n_ts = int(cfg.model.get("n_ts_features", 0))
+                        ts_ok = n_ts == 0 or (
+                            ts is not None and ts.size(1) == lookback and ts.size(-1) == n_ts
                         )
+                        if (
+                            expected_c not in (1, 2, 5)
+                            or x.size(-1) != expected_c
+                            or text.size(-1) != 15
+                            or text_seq.size(-1) != 15
+                            or x.size(1) != lookback
+                            or not ts_ok
+                        ):
+                            raise RuntimeError(
+                                "c1_dual batch "
+                                f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)} "
+                                f"ts={None if ts is None else tuple(ts.shape)}; "
+                                f"expected [B, {lookback}, {expected_c}], text 15"
+                                + (f", ts [B, {lookback}, {n_ts}]" if n_ts else "")
+                            )
                     if str(cfg.model.name) == "c1_compact" and (
                         x.size(-1) != 5
                         or text.size(-1) != 15
@@ -453,7 +499,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         )
                     log_cuda_memory("first train batch")
                 optimizer.zero_grad(set_to_none=True)
-                out = model(x, text, text_seq=text_seq)
+                out = _forecast_forward(model, x, text, text_seq, ts)
                 if not hasattr(model, "compute_loss"):
                     raise NotImplementedError(f"{type(model).__name__} has no compute_loss")
                 loss, train_metrics = model.compute_loss(

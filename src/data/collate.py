@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, Dataset
 
 
 def forecast_collate(batch: list[dict]) -> dict[str, torch.Tensor | list]:
-    return {
+    collated: dict[str, torch.Tensor | list] = {
         "x": torch.stack([item["x"] for item in batch], dim=0),
         "y": torch.stack([item["y"] for item in batch], dim=0),
         "text": torch.stack([item["text"] for item in batch], dim=0),
@@ -19,6 +19,11 @@ def forecast_collate(batch: list[dict]) -> dict[str, torch.Tensor | list]:
         "end_idx": torch.tensor([item["end_idx"] for item in batch], dtype=torch.long),
         "end_date": [item["end_date"] for item in batch],
     }
+    if any("ts" in item for item in batch):
+        if not all("ts" in item for item in batch):
+            raise KeyError("ts must be present on every sample in the batch")
+        collated["ts"] = torch.stack([item["ts"] for item in batch], dim=0)
+    return collated
 
 
 def make_forecast_loader(

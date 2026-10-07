@@ -23,6 +23,12 @@ from src.data.text_series import (
 log = logging.getLogger(__name__)
 
 _NEWS_CHUNKSIZE = 200_000
+_ENDOGENOUS_CHANNELS = (
+    ("close",),
+    ("close", "volume"),
+    ("close", "volume", "open", "high", "low"),
+)
+_N_EXOGENOUS_TS = 25
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,7 @@ class TickerSeries:
     dates: pd.Series
     text_seq: np.ndarray | None = None
     has_news: np.ndarray | None = None
+    ts_exo: np.ndarray | None = None
     target_mean: float = 0.0
     target_std: float = 1.0
 
@@ -296,6 +303,7 @@ class FNSPIDForecastDataset(Dataset):
         scale_y_from_target: bool = False,
         feature_roles: tuple[str, ...] | None = None,
         close_idx: int | None = None,
+        ts_roles: tuple[str, ...] | None = None,
     ) -> None:
         self.indices = indices
         self.store = store
@@ -311,6 +319,7 @@ class FNSPIDForecastDataset(Dataset):
         self.scale_y_from_target = bool(scale_y_from_target)
         self.feature_roles = None if feature_roles is None else tuple(feature_roles)
         self.close_idx = self.target_idx if close_idx is None else int(close_idx)
+        self.ts_roles = None if ts_roles is None else tuple(ts_roles)
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -364,7 +373,7 @@ class FNSPIDForecastDataset(Dataset):
             text_seq = np.zeros((t_len, self.text_dim), dtype=np.float32)
             text = np.zeros(self.text_dim, dtype=np.float32)
             has_news_frac = 0.0
-        return {
+        item = {
             "x": torch.from_numpy(np.asarray(x, dtype=np.float32).copy()),
             "y": torch.from_numpy(np.asarray(y, dtype=np.float32).copy()),
             "y_mean": torch.tensor(y_mean, dtype=torch.float32),
@@ -376,6 +385,13 @@ class FNSPIDForecastDataset(Dataset):
             "end_idx": wi.end_idx,
             "end_date": wi.end_date,
         }
+        if ts.ts_exo is not None:
+            if not self.ts_roles:
+                raise RuntimeError("exogenous indicators require ts_roles")
+            raw_exo = ts.ts_exo[wi.start_idx : wi.end_idx]
+            exo, _, _ = selective_window(raw_exo, self.ts_roles, 0)
+            item["ts"] = torch.from_numpy(np.asarray(exo, dtype=np.float32).copy())
+        return item
 
 
 def _cap_recent(items: list[WindowIndex], limit) -> list[WindowIndex]:
@@ -705,6 +721,104 @@ def _attach_compact_text(
     return kept
 
 
+def _attach_exogenous_ts(
+    cfg: DictConfig,
+    series: dict[str, TickerSeries],
+    feature_names: list[str],
+    train_end: pd.Timestamp | None,
+    horizon: int,
+    lookback: int,
+) -> tuple[dict[str, TickerSeries], tuple[str, ...]]:
+    """Align the frozen 25 TreeSHAP indicators and scale them with the price rows.
+
+    Rows without a finite indicator vector are dropped from the price series,
+    the compact text, and the indicators together. Robust scaling then uses
+    the remaining train dates, and ``__getitem__`` still runs ``selective_window``
+    so any level column inside the indicator block gets per-window RevIN.
+    """
+    from src.data.selected_pipeline import read_signature
+
+    signature = read_signature(Path(str(cfg.data.signature_path)), horizon=horizon, lookback=lookback)
+    columns = [str(name) for name in signature["ts_columns"][1:]]
+    if len(columns) != _N_EXOGENOUS_TS or len(set(columns)) != _N_EXOGENOUS_TS:
+        raise ValueError(f"expected {_N_EXOGENOUS_TS} unique indicator columns, got {columns}")
+    roles = feature_roles(columns)
+    technical_dir = Path(str(cfg.data.technical_cache_dir))
+    needed = lookback + horizon
+    kept: dict[str, TickerSeries] = {}
+    for ticker, ts in series.items():
+        path = technical_dir / f"{ticker}.parquet"
+        if not path.is_file():
+            log.warning("Skipping ticker %s: missing technical cache %s", ticker, path)
+            continue
+        try:
+            aligned = _align_indicator_rows(path, ts.dates, columns)
+        except (KeyError, ValueError, OSError) as exc:
+            log.warning("Skipping ticker %s: %s", ticker, exc)
+            continue
+        keep = np.isfinite(aligned).all(axis=1)
+        if int(keep.sum()) < needed:
+            log.warning(
+                "Skipping ticker %s: %d finite indicator rows, need %d",
+                ticker,
+                int(keep.sum()),
+                needed,
+            )
+            continue
+        _slice_ticker_series(ts, keep)
+        aligned = aligned[keep]
+        train_mask = np.ones(len(ts.features), dtype=bool)
+        if train_end is not None:
+            train_mask &= (ts.dates <= train_end).to_numpy()
+        if int(train_mask.sum()) < 1:
+            log.warning("Skipping ticker %s: no train rows after indicator alignment", ticker)
+            continue
+        ts.features = apply_static_and_robust(ts.features, feature_names, train_mask).astype(np.float32)
+        ts.ts_exo = apply_static_and_robust(aligned, columns, train_mask).astype(np.float32)
+        kept[ticker] = ts
+    return kept, roles
+
+
+def _align_indicator_rows(path: Path, dates: pd.Series, columns: list[str]) -> np.ndarray:
+    """Place technical columns on the price calendar. Missing days stay NaN."""
+    from src.data.selected_pipeline import _naive_days
+
+    frame = pd.read_parquet(path)
+    missing = [column for column in ("date", *columns) if column not in frame.columns]
+    if missing:
+        raise KeyError(f"{path} is missing indicator columns {missing[:8]}")
+    frame = frame.copy()
+    frame["date"] = _naive_days(frame["date"])
+    frame = frame.drop_duplicates("date", keep="last").set_index("date")
+    wanted = _naive_days(dates)
+    if wanted.has_duplicates:
+        raise ValueError("price dates must be unique before indicator alignment")
+    present = wanted.isin(frame.index)
+    if not bool(present.any()):
+        raise ValueError(f"{path.name}: technical cache does not overlap the price calendar")
+    out = np.full((len(wanted), len(columns)), np.nan, dtype=np.float64)
+    block = frame.loc[wanted[present], list(columns)].to_numpy(dtype=np.float64)
+    out[np.asarray(present)] = block
+    return out
+
+
+def _slice_ticker_series(ts: TickerSeries, keep: np.ndarray) -> None:
+    mask = np.asarray(keep, dtype=bool)
+    if mask.shape != (len(ts.features),):
+        raise ValueError("keep mask does not match the price series")
+    ts.features = np.asarray(ts.features)[mask]
+    ts.target = np.asarray(ts.target)[mask]
+    ts.dates = pd.Series(pd.DatetimeIndex(np.asarray(ts.dates)[mask])).reset_index(drop=True)
+    if ts.text_seq is not None:
+        if len(ts.text_seq) != len(mask):
+            raise ValueError("text length does not match the price series")
+        ts.text_seq = np.asarray(ts.text_seq)[mask]
+    if ts.has_news is not None:
+        if len(ts.has_news) != len(mask):
+            raise ValueError("has_news length does not match the price series")
+        ts.has_news = np.asarray(ts.has_news)[mask]
+
+
 def build_datasets(
     cfg: DictConfig, device: str | torch.device | None = None
 ) -> tuple[FNSPIDForecastDataset, ...]:
@@ -726,6 +840,7 @@ def build_datasets(
     mode = str(cfg.data.get("features_mode", "ohlcv"))
     selected = mode == "selected_40d"
     scale_y_from_target = False
+    ts_roles: tuple[str, ...] | None = None
     series: dict[str, TickerSeries] = {}
     if selected:
         if normalize != "per_window":
@@ -777,18 +892,30 @@ def build_datasets(
             text_dim,
         )
     else:
+        endo = tuple(str(column) for column in features)
+        if mode == "dual_ts":
+            if normalize != "selective":
+                raise ValueError("dual_ts requires data.normalize=selective")
+            if endo not in _ENDOGENOUS_CHANNELS:
+                raise ValueError(
+                    "dual_ts features must be [close], [close, volume], or "
+                    f"[close, volume, open, high, low], got {list(endo)}"
+                )
+            if text_dim != 15:
+                raise ValueError(f"dual_ts requires text.dim 15, got {text_dim}")
         try:
             target_idx = [str(f) for f in features].index(target_col)
         except ValueError as exc:
             raise ValueError(f"target {target_col!r} not in features {features}") from exc
         store = TickerDataStore(root, str(cfg.data.news_source), features, target_col)
+        price_normalize = "per_window" if mode == "dual_ts" else normalize
         for ticker in tickers:
             try:
                 series[ticker] = store.get_series(
                     ticker,
                     train_end=train_end,
                     train_start=train_start,
-                    normalize=normalize,
+                    normalize=price_normalize,
                 )
             except (FileNotFoundError, KeyError, ValueError) as exc:
                 log.warning("Skipping ticker %s: %s", ticker, exc)
@@ -812,6 +939,27 @@ def build_datasets(
                 cfg.data.text_compact_cache_dir,
                 len(series),
                 text_dim,
+            )
+        elif mode == "dual_ts":
+            series = _attach_compact_text(cfg, series)
+            if not series:
+                raise RuntimeError(f"No compact-text series loaded for {tickers}")
+            series, ts_roles = _attach_exogenous_ts(
+                cfg,
+                series,
+                [str(column) for column in features],
+                train_end,
+                horizon,
+                lookback,
+            )
+            if not series:
+                raise RuntimeError(f"No dual_ts series loaded for {tickers}")
+            log.info(
+                "Dual TS cache %s indicators=%d tickers=%d endogenous=%s",
+                cfg.data.signature_path,
+                len(ts_roles),
+                len(series),
+                list(endo),
             )
         elif text_enabled:
             _attach_text_series(cfg, store, series, tickers, train_end, device)
@@ -857,6 +1005,7 @@ def build_datasets(
         scale_y_from_target=scale_y_from_target,
         feature_roles=feature_roles([str(column) for column in features]) if normalize == "selective" else None,
         close_idx=features.index("close") if normalize == "selective" and "close" in [str(column) for column in features] else target_idx,
+        ts_roles=ts_roles,
     )
     train_ds = FNSPIDForecastDataset(_cap(train_idx, cfg.train.max_train_windows), **common)
     val_ds = FNSPIDForecastDataset(_cap(val_idx, cfg.train.max_val_windows), **common)
