@@ -21,6 +21,7 @@ from src.models.timexer_c0 import TimeXerC0
 from src.models.timexer_c1 import TimeXerC1
 from src.models.timexer_c1_compact import TimeXerC1Compact
 from src.models.timexer_dual import TimeXerDual
+from src.models.timexer_hierarchical import TimeXerHierarchical
 from src.models.timexer_plain import TimeXerPlain
 from src.models.timexer_selected import TimeXerSelected
 from src.models.timexl_a import TimeXLModelA
@@ -171,11 +172,11 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_dropout=head_dropout,
             head_pool=head_pool,
         )
-    if name == "c1_dual":
+    if name in {"c1_dual", "c1_hierarchical"}:
         text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
         if n_features not in (1, 2, 5) or text_dim != 15:
             raise ValueError(
-                "c1_dual expects 1, 2, or 5 endogenous channels and text_dim 15, "
+                f"{name} expects 1, 2, or 5 endogenous channels and text_dim 15, "
                 f"got n_features={n_features} text_dim={text_dim}"
             )
         declared = cfg.model.get("n_features", None)
@@ -190,7 +191,8 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
                 f"got {n_ts_features}"
             )
         d_model = int(cfg.model.d_model)
-        return TimeXerDual(
+        model_cls = TimeXerHierarchical if name == "c1_hierarchical" else TimeXerDual
+        return model_cls(
             n_features=n_features,
             seq_len=seq_len,
             horizon=int(cfg.data.horizon),
@@ -263,7 +265,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
     raise NotImplementedError(
         "Model "
         f"'{name}' not implemented. Use model=a, b, c0, c1, c1_compact, c1_dual, "
-        "timexer_plain, timexer_selected, or dlinear."
+        "c1_hierarchical, timexer_plain, timexer_selected, or dlinear."
     )
 
 
@@ -453,7 +455,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         None if ts is None else tuple(ts.shape),
                     )
                     log.info("First batch tensors on x=%s text=%s", x.device, text.device)
-                    if str(cfg.model.name) == "c1_dual":
+                    if str(cfg.model.name) in {"c1_dual", "c1_hierarchical"}:
                         expected_c = len([str(column) for column in cfg.data.features])
                         lookback = int(cfg.data.lookback_T)
                         n_ts = int(cfg.model.get("n_ts_features", 0))
@@ -469,7 +471,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                             or not ts_ok
                         ):
                             raise RuntimeError(
-                                "c1_dual batch "
+                                f"{cfg.model.name} batch "
                                 f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)} "
                                 f"ts={None if ts is None else tuple(ts.shape)}; "
                                 f"expected [B, {lookback}, {expected_c}], text 15"
