@@ -13,6 +13,8 @@ fusion:
   global_to_patch: true
 
 d_model: 64
+# null means 4 * d_model inside build_model, so a d_model override still widens the FFN.
+d_ff: null
 n_heads: 4
 e_layers: 1
 dropout: 0.1

@@ -191,6 +191,8 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
                 f"got {n_ts_features}"
             )
         d_model = int(cfg.model.d_model)
+        raw_d_ff = cfg.model.get("d_ff", None)
+        d_ff = 4 * d_model if raw_d_ff is None else int(raw_d_ff)
         model_cls = TimeXerHierarchical if name == "c1_hierarchical" else TimeXerDual
         return model_cls(
             n_features=n_features,
@@ -209,7 +211,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             use_prototypes=bool(cfg.model.get("use_prototypes", False)),
             n_prototypes=int(cfg.model.get("n_prototypes", 10)),
             d_min=float(cfg.model.get("d_min", 0.5)),
-            d_ff=int(cfg.model.get("d_ff", 4 * d_model)),
+            d_ff=d_ff,
             head_type=head_type,
             head_hidden=head_hidden,
             head_dropout=head_dropout,

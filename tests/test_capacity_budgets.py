@@ -6,11 +6,16 @@ Width is only ``d_model``, ``n_heads``, and ``d_ff``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
+from hydra import compose, initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
 
 from src.models.timexer_dual import TimeXerDual
 from src.models.timexer_hierarchical import TimeXerHierarchical
+from src.training.train import build_model
 
 _DUAL_FUSION = {
     "kind": "c1_dual",
@@ -112,3 +117,57 @@ def test_width_budgets_match_the_table(
 def test_hierarchical_still_rejects_other_depths(e_layers: int) -> None:
     with pytest.raises(ValueError, match="exactly two layers"):
         _build("hierarchical", e_layers, 64, 4, 256)
+
+
+def _compose(overrides: list[str]):
+    GlobalHydra.instance().clear()
+    cfg_dir = str(Path(__file__).resolve().parents[1] / "configs")
+    with initialize_config_dir(version_base=None, config_dir=cfg_dir):
+        return compose(config_name="config", overrides=overrides)
+
+
+def test_hydra_accepts_the_failed_dual_d_ff_override() -> None:
+    cfg = _compose(
+        [
+            "model=c1_dual",
+            "data=fnspid_dual_ts",
+            "data.features=[close,volume]",
+            "model.n_features=2",
+            "model.n_ts_features=25",
+            "model.e_layers=1",
+            "model.d_model=56",
+            "model.n_heads=2",
+            "model.d_ff=200",
+            "model.use_prototypes=false",
+        ]
+    )
+    model = build_model(cfg)
+    assert isinstance(model, TimeXerDual)
+    assert model.layers[0].ff[0].out_features == 200
+    assert sum(parameter.numel() for parameter in model.parameters()) == 91_601
+
+
+def test_hydra_dual_null_d_ff_tracks_four_times_d_model() -> None:
+    cfg = _compose(["model=c1_dual", "model.d_model=128"])
+    model = build_model(cfg)
+    assert isinstance(model, TimeXerDual)
+    assert model.layers[0].ff[0].out_features == 512
+
+
+def test_hydra_hierarchical_half_budget() -> None:
+    cfg = _compose(
+        [
+            "model=c1_hierarchical",
+            "model.e_layers=2",
+            "model.d_model=48",
+            "model.n_heads=3",
+            "model.d_ff=128",
+            "data=fnspid_dual_ts",
+            "data.features=[close,volume]",
+            "model.n_features=2",
+            "model.n_ts_features=25",
+        ]
+    )
+    model = build_model(cfg)
+    assert isinstance(model, TimeXerHierarchical)
+    assert sum(parameter.numel() for parameter in model.parameters()) == 85_993
