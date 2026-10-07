@@ -2,32 +2,29 @@
 
 - authored_by: runner
 - created_at: 2026-10-07T10:51:37Z
-- updated_at: 2026-10-07T13:04:00Z
+- updated_at: 2026-10-07T14:20:37Z
 - request_folder: agent-handoff/2026-10-07_1200_paper-timexer-dual-active-ts/
 - tested_ref: feat/phase2-timexer@1580c0bd5e2484eb8f3e6fa4b0325125fca4653b
-- status: partial (Block 1/3, 6/24 jobs completed)
+- status: partial (Block 2/3, 14/24 jobs completed)
 
 ## Commands executed
 ```bash
 # cwd: /workspace/DecisionForecast
-# git pull --ff-only origin feat/phase2-timexer  (10ef7a6..1580c0b)
-# uv sync
-# HF_TOKEN unset. No prepare. Resume PID 15891 still alive. No new train.
+# HF_TOKEN unset. No prepare. Timer harvest while PID 15891 is alive. No new train.
 ```
 
 ## Outcome
-- exit_code: in progress; 6/24 DONE; SWEEP_DONE absent; no traceback after RESUME SWEEP START
+- exit_code: in progress; Block 1 FINISHED at 2026-10-07T13:22:05Z; 14/24 DONE; SWEEP_DONE absent; no traceback after RESUME SWEEP START
 - host: runpod pod sw7txpqcwtk7tz (hostname f095b9ee3fba)
-- device: all 6 finished jobs train device cuda, DataLoader num_workers=4. No OOM.
+- device: all 14 finished jobs train device cuda, DataLoader num_workers=4. No OOM.
 - pid: 15891
 - log: outputs/paper-timexer-dual-active-ts.log
 - resume_started_at: 2026-10-07T12:19:20Z
-- current_job: Block 1 F2 [close, volume], n_features=2, e_layers=2, use_prototypes=false, seed=2 (started 2026-10-07T12:53:45Z)
-- fix: job 4 reached proto kmeans++ init bank=(2560, 64) and finished
+- current_job: Block 2 F1 [close], n_features=1, e_layers=2, use_prototypes=false, seed=2 (started 2026-10-07T14:19:04Z)
 - splits: train 98116 / val 12048 / test 11904
 - skipped price files: UNH, VZ
 
-best_val_mse = min Epoch val_mse. stop_ep = early-stop epoch, else last logged epoch. test_* = METRICS_ROW.
+best_val_mse = min Epoch val_mse. stop_ep = early-stop epoch, else last logged epoch. test_* = METRICS_ROW. Prototype rows are seed=1 only.
 
 ### Finished jobs
 
@@ -38,19 +35,33 @@ best_val_mse = min Epoch val_mse. stop_ep = early-stop epoch, else last logged e
 | close,volume | 2 | 1 | true | 1 | 10 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 126921 | 0.7705 | 0.7548 | 0.5967 |
 | close,volume | 2 | 2 | false | 0 | 6 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 239051 | 0.7634 | 0.7818 | 0.6098 |
 | close,volume | 2 | 2 | false | 1 | 8 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 239051 | 0.7612 | 0.7669 | 0.6020 |
+| close,volume | 2 | 2 | false | 2 | 6 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 239051 | 0.7608 | 0.7726 | 0.6059 |
+| close,volume | 2 | 2 | true | 1 | 11 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 243851 | 0.7151 | 0.7701 | 0.6024 |
+| close | 1 | 1 | false | 0 | 10 | 98116 | 12048 | 11904 | (32, 60, 1) | (32, 60, 15) | (32, 60, 25) | 121353 | 0.7478 | 0.7678 | 0.6028 |
+| close | 1 | 1 | false | 1 | 8 | 98116 | 12048 | 11904 | (32, 60, 1) | (32, 60, 15) | (32, 60, 25) | 121353 | 0.7455 | 0.7552 | 0.5966 |
+| close | 1 | 1 | false | 2 | 6 | 98116 | 12048 | 11904 | (32, 60, 1) | (32, 60, 15) | (32, 60, 25) | 121353 | 0.7334 | 0.7587 | 0.5967 |
+| close | 1 | 1 | true | 1 | 9 | 98116 | 12048 | 11904 | (32, 60, 1) | (32, 60, 15) | (32, 60, 25) | 126153 | 0.7196 | 0.7565 | 0.5947 |
+| close | 1 | 2 | false | 0 | 8 | 98116 | 12048 | 11904 | (32, 60, 1) | (32, 60, 15) | (32, 60, 25) | 238283 | 0.7761 | 0.7621 | 0.5991 |
+| close | 1 | 2 | false | 1 | 6 | 98116 | 12048 | 11904 | (32, 60, 1) | (32, 60, 15) | (32, 60, 25) | 238283 | 0.7154 | 0.7545 | 0.5954 |
 
-Means n=3, sample std. Prototype rows are seed=1 only. F2 e=2 no-prototype is 2/3 seeds, so no mean yet.
+Means n=3, sample std. Incomplete cells omitted (F1 e=2 no prototypes: 2/3 seeds). Prototype lines are one seed.
 
-| features | n_features | e_layers | use_proto | n_params | best_val_mse | test_mse | test_mae |
-| close,volume | 2 | 1 | false | 122121 | 0.7582±0.0169 | 0.7655±0.0032 | 0.6012±0.0014 |
+| features | n_features | e_layers | use_proto | n | n_params | best_val_mse | test_mse | test_mae |
+| close,volume | 2 | 1 | false | 3 | 122121 | 0.7582±0.0169 | 0.7655±0.0032 | 0.6012±0.0014 |
+| close,volume | 2 | 1 | true | 1 | 126921 | 0.7705 | 0.7548 | 0.5967 |
+| close,volume | 2 | 2 | false | 3 | 239051 | 0.7618±0.0014 | 0.7738±0.0075 | 0.6059±0.0039 |
+| close,volume | 2 | 2 | true | 1 | 243851 | 0.7151 | 0.7701 | 0.6024 |
+| close | 1 | 1 | false | 3 | 121353 | 0.7422±0.0077 | 0.7606±0.0065 | 0.5987±0.0036 |
+| close | 1 | 1 | true | 1 | 126153 | 0.7196 | 0.7565 | 0.5947 |
 
 - oom: no
-- traceback_summary: n/a after resume. The 11:17:16Z ValueError is the pre-fix crash.
+- traceback_summary: n/a after resume
 
 ## Artifacts (paths on Runner disk — do not commit binaries)
 - train_log: outputs/paper-timexer-dual-active-ts.log
 
 ## Conclusions for Dev
-1. Block 1 is 6/8 jobs done. 6/24 overall. Current job is F2, e=2, no prototypes, seed=2. One prototype seed remains in this block after it (e=2, seed=1).
-2. The fix held. Job 4, F2 e=1 prototypes seed=1, finished: test 0.7548, mae 0.5967, shapes x=(32, 60, 2), text_seq=(32, 60, 15), ts=(32, 60, 25). That single seed is 0.0001 above DLinear 0.7547 and 0.0013 above 0.7535. It is not a 3-seed mean.
-3. F2 e=1 without prototypes stays at test 0.7655±0.0032. The two finished e=2 no-prototype seeds are 0.7818 and 0.7669, both worse than the e=1 no-prototype mean.
+1. Block 1 is complete. 14/24 overall. Block 2 (F1) has 6/8 jobs done. Current job is F1, e=2, no prototypes, seed=2. F5 has not started.
+2. Best complete mean so far is F1 e=1 without prototypes: test 0.7606±0.0065, mae 0.5987±0.0036. That beats F2 e=1 no prototypes (0.7655±0.0032) and still sits above DLinear 0.7535 and 0.7547.
+3. F2 e=2 no prototypes is worse than F2 e=1: test 0.7738±0.0075. The F2 e=2 prototype seed (0.7701) lowers best_val to 0.7151 and does not beat the e=1 no-prototype mean.
+4. Closest single seeds to DLinear: F1 e=2 no prototypes seed=1 test 0.7545 (0.0002 under 0.7547, 0.0010 over 0.7535; the pair is incomplete, seed=0 is 0.7621), F2 e=1 prototypes seed=1 test 0.7548, F1 e=1 no prototypes seed=1 test 0.7552. No complete cell beats 0.7535.
