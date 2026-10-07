@@ -2,7 +2,7 @@
 
 - authored_by: runner
 - created_at: 2026-10-07T10:51:37Z
-- updated_at: 2026-10-07T11:31:08Z
+- updated_at: 2026-10-07T11:33:24Z
 - request_folder: agent-handoff/2026-10-07_1200_paper-timexer-dual-active-ts/
 - tested_ref: feat/phase2-timexer@39ee9f0d58e9bf62155e17723b2209b4aa7fb7f8
 - status: fail
@@ -50,6 +50,25 @@ Mean n=3, sample std. Only the F2 e=1 no-prototype cell is complete.
 ## Artifacts (paths on Runner disk — do not commit binaries)
 - train_log: outputs/paper-timexer-dual-active-ts.log
 
+## Error for Dev
+
+Prototype init drops the 25D indicator tensor. The no-prototype train path does not.
+
+`configs/train/default.yaml` sets `train.proto.init: kmeans`. `use_prototypes=true` makes `TimeXerDual.proto` exist, so `src/training/train.py` `run_training` calls `collect_segment_bank` before the first epoch. That helper never reads `batch["ts"]`:
+
+```python
+# src/explain/bank.py, collect_segment_bank
+out = model(x, text, text_seq=text_seq)
+```
+
+`TimeXerDual.forward` rejects that call when `n_ts_features=25` and `ts is None` (`src/models/timexer_dual.py`, around the `n_ts_features > 0 and ts is None` check).
+
+The epoch loop is fine. `_forecast_inputs` takes `batch.get("ts")`, and `_forecast_forward` passes `ts=ts` when the tensor is present. The three finished jobs logged `ts=(32, 60, 25)` and never entered the bank. `hasattr(model, "proto")` is false while `use_prototypes=false`, so those jobs skipped kmeans init.
+
+Same hole: `src/explain/projection.py` also calls `collect_segment_bank`.
+
+Needed change: pass `batch["ts"]` into the model from `collect_segment_bank`, the same way `_forecast_forward` does. Until that lands, every `c1_dual` job with `n_ts_features=25` and `use_prototypes=true` dies in bank init, and `set -e` drops the rest of the sweep. Runner did not patch product code and did not restart.
+
 ## Conclusions for Dev
-1. The sweep is dead at 3/24. Job 4 is the first prototypes=true job. Prototype bank init calls the model without the 25D ts tensor. Remaining 20 jobs did not start. No restart from Runner.
+1. Sweep is dead at 3/24. Job 4 is the first `use_prototypes=true` job. It built n_params=126921, then died in kmeans bank init. Block 1 e=2 and all of F1 and F5 never started.
 2. The only complete cell, F2 e=1 without prototypes, has test 0.7655±0.0032 and mae 0.6012±0.0014. That does not beat DLinear test 0.7535 or 0.7547. Shapes on those jobs are x=(32, 60, 2), text_seq=(32, 60, 15), ts=(32, 60, 25).
