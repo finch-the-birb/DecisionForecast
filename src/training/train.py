@@ -21,7 +21,10 @@ from src.models.timexer_c0 import TimeXerC0
 from src.models.timexer_c1 import TimeXerC1
 from src.models.timexer_c1_compact import TimeXerC1Compact
 from src.models.timexer_dual import TimeXerDual
+from src.models.timexer_factored import TimeXerFactored
 from src.models.timexer_hierarchical import TimeXerHierarchical
+from src.models.timexer_inverted import TimeXerInverted
+from src.models.timexer_late_fusion import TimeXerLateFusion
 from src.models.timexer_plain import TimeXerPlain
 from src.models.timexer_selected import TimeXerSelected
 from src.models.timexl_a import TimeXLModelA
@@ -245,6 +248,55 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_dropout=head_dropout,
             head_pool=head_pool,
         )
+    if name in {"c1_factored", "c1_inverted", "c1_late_fusion"}:
+        text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
+        if n_features != 5 or text_dim != 15:
+            raise ValueError(
+                f"{name} expects 5 OHLCV channels and text_dim 15, "
+                f"got n_features={n_features} text_dim={text_dim}"
+            )
+        declared = cfg.model.get("n_features", None)
+        if declared is not None and int(declared) != n_features:
+            raise ValueError(
+                f"model.n_features={int(declared)} does not match {n_features} data channels"
+            )
+        n_ts_features = int(cfg.model.get("n_ts_features", 25))
+        if n_ts_features != 25:
+            raise ValueError(f"{name} requires model.n_ts_features=25, got {n_ts_features}")
+        d_model = int(cfg.model.d_model)
+        raw_d_ff = cfg.model.get("d_ff", None)
+        d_ff = 4 * d_model if raw_d_ff is None else int(raw_d_ff)
+        common = dict(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=d_model,
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=text_dim,
+            fusion=cfg.model.fusion,
+            n_ts_features=n_ts_features,
+            close_idx=features.index("close") if "close" in features else 0,
+            use_prototypes=bool(cfg.model.get("use_prototypes", False)),
+            n_prototypes=int(cfg.model.get("n_prototypes", 10)),
+            d_min=float(cfg.model.get("d_min", 0.5)),
+            d_ff=d_ff,
+            head_type=head_type,
+            head_hidden=head_hidden,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
+        if name == "c1_factored":
+            return TimeXerFactored(
+                n_patch_indicators=int(cfg.model.get("n_patch_indicators", 8)),
+                **common,
+            )
+        if name == "c1_inverted":
+            return TimeXerInverted(**common)
+        return TimeXerLateFusion(**common)
     if name == "timexer_selected":
         return TimeXerSelected(
             n_features=n_features,
@@ -267,7 +319,8 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
     raise NotImplementedError(
         "Model "
         f"'{name}' not implemented. Use model=a, b, c0, c1, c1_compact, c1_dual, "
-        "c1_hierarchical, timexer_plain, timexer_selected, or dlinear."
+        "c1_hierarchical, c1_factored, c1_inverted, c1_late_fusion, "
+        "timexer_plain, timexer_selected, or dlinear."
     )
 
 
@@ -478,6 +531,25 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                                 f"ts={None if ts is None else tuple(ts.shape)}; "
                                 f"expected [B, {lookback}, {expected_c}], text 15"
                                 + (f", ts [B, {lookback}, {n_ts}]" if n_ts else "")
+                            )
+                    if str(cfg.model.name) in {"c1_factored", "c1_inverted", "c1_late_fusion"}:
+                        lookback = int(cfg.data.lookback_T)
+                        n_ts = int(cfg.model.get("n_ts_features", 25))
+                        ts_ok = (
+                            ts is not None and ts.size(1) == lookback and ts.size(-1) == n_ts
+                        )
+                        if (
+                            x.size(-1) != 5
+                            or x.size(1) != lookback
+                            or text.size(-1) != 15
+                            or text_seq.size(-1) != 15
+                            or not ts_ok
+                        ):
+                            raise RuntimeError(
+                                f"{cfg.model.name} batch "
+                                f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)} "
+                                f"ts={None if ts is None else tuple(ts.shape)}; "
+                                f"expected x [B, {lookback}, 5], text 15, ts [B, {lookback}, {n_ts}]"
                             )
                     if str(cfg.model.name) == "c1_compact" and (
                         x.size(-1) != 5

@@ -1,0 +1,41 @@
+# Late residual fusion. The encoder is compact TimeXer on 5 OHLCV, 6 rFFT bins,
+# and 15D text. A MLP(25, 64, d_model) reads the 25 indicators on the last bar
+# and is added to the pooled patch token before the head.
+name: c1_late_fusion
+variant: timexer_late_fusion
+
+fusion:
+  kind: c1_late_fusion
+  text_at_head: false
+  text_to_patches: false
+  text_as_exogenous: true
+  global_to_patch: true
+
+d_model: 64
+# null means 4 * d_model inside build_model.
+d_ff: null
+n_heads: 4
+e_layers: 1
+dropout: 0.1
+text_dim: 15
+n_features: 5
+n_ts_features: 25
+
+use_prototypes: false
+n_prototypes: 10
+d_min: 0.5
+
+head:
+  pool: last
+  type: linear
+  hidden: 128
+  dropout: 0.0
+
+loss:
+  kind: huber
+  delta: 0.5
+  lambda_c: 0.1
+  lambda_e: 0.1
+  lambda_d: 0.01
+  gamma_dir: 0.0
+  alpha_corr: 0.0
