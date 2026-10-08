@@ -2,10 +2,10 @@
 
 - authored_by: runner
 - created_at: 2026-10-07T22:12:16Z
-- updated_at: 2026-10-07T23:34:23Z
+- updated_at: 2026-10-08T00:02:04Z
 - request_folder: agent-handoff/2026-10-07_2300_paper-capacity-budgets/
 - tested_ref: feat/phase2-timexer@ddfa2bf89f4e632537cc92236851f57cc9326100
-- status: partial (Block 2/3, 9/18 jobs completed)
+- status: partial (Block 2/3, 11/18 jobs completed)
 
 ## Commands executed
 ```bash
@@ -14,13 +14,13 @@
 ```
 
 ## Outcome
-- exit_code: in progress; Block 1 DONE at 2026-10-07T22:59:19Z; 9/18 DONE; SWEEP_DONE absent; no Traceback
+- exit_code: in progress; Block 1 DONE at 2026-10-07T22:59:19Z; 11/18 DONE; SWEEP_DONE absent; no Traceback
 - host: runpod pod sw7txpqcwtk7tz (hostname f095b9ee3fba)
-- device: all 9 finished jobs train device cuda, DataLoader num_workers=4. No OOM.
+- device: all 11 finished jobs train device cuda, DataLoader num_workers=4. No OOM.
 - pid: 123275
 - log: outputs/paper-capacity-budgets.log
 - started_at: 2026-10-07T22:11:58Z
-- current_job: Block 2 c1_dual e_layers=2, d_model=48, n_heads=3, d_ff=104, seed=0 (started 2026-10-07T23:33:32Z)
+- current_job: Block 2 c1_dual e_layers=2, d_model=48, n_heads=3, d_ff=104, seed=2 (started 2026-10-08T00:00:55Z)
 - splits: train 98116 / val 12048 / test 11904
 - first-batch shapes: x=(32, 60, 2), text_seq=(32, 60, 15), ts=(32, 60, 25)
 
@@ -38,6 +38,8 @@ best_val_mse = min Epoch val_mse. stop_ep = early-stop epoch, else last logged e
 | c1_dual | 2 | 56 | 2 | 200 | 0 | 7 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 178659 | 178659 | 0.7970 | 0.7830 | 0.6118 |
 | c1_dual | 2 | 56 | 2 | 200 | 1 | 7 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 178659 | 178659 | 0.7414 | 0.7590 | 0.5974 |
 | c1_dual | 2 | 56 | 2 | 200 | 2 | 6 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 178659 | 178659 | 0.7483 | 0.7721 | 0.6052 |
+| c1_dual | 2 | 48 | 3 | 104 | 0 | 11 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 119211 | 119211 | 0.7892 | 0.7767 | 0.6068 |
+| c1_dual | 2 | 48 | 3 | 104 | 1 | 7 | 98116 | 12048 | 11904 | (32, 60, 2) | (32, 60, 15) | (32, 60, 25) | 119211 | 119211 | 0.7793 | 0.7593 | 0.5969 |
 
 ### Means
 
@@ -53,6 +55,6 @@ best_val_mse = min Epoch val_mse. stop_ep = early-stop epoch, else last logged e
 - train_log: outputs/paper-capacity-budgets.log
 
 ## Conclusions for Dev
-1. Block 1 is complete. 9/18 overall. Dual e=2 at 75% (d_model=56) is complete. Current job is dual e=2 at 50%, d_model=48, d_ff=104, seed=0. Measured n_params still match 91601, 60777, and 178659.
+1. Block 1 is complete. 11/18 overall. Dual e=2 at 75% is complete. Dual e=2 at 50% has seeds 0 and 1 done; seed=2 is running. n_params match the locked budgets, including the new cell at 119211.
 2. Dual e=1 at 75% (91601 params): test 0.7668±0.0118. At 50% (60777 params): test 0.7631±0.0100. The 50% mean is slightly under the full dual F2 e=1 mean 0.7655±0.0032. Both stay above DLinear F1 0.7535±0.0009. Closest single seeds are 50% seed=1 at 0.7539 and 75% seed=2 at 0.7545.
-3. Dual e=2 at 75% (178659 params): test 0.7714±0.0120. That is slightly under the full dual F2 e=2 mean 0.7738±0.0075 and worse than both e=1 cuts. Seed=1 is 0.7590; seed=0 is 0.7830.
+3. Dual e=2 at 75% (178659 params): test 0.7714±0.0120, slightly under the full dual F2 e=2 mean 0.7738±0.0075. The two finished 50% seeds are 0.7767 and 0.7593. The 3-seed mean waits on seed=2.
