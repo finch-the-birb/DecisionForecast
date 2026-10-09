@@ -107,3 +107,6 @@ done
 - train_log: `outputs/becker-dual-hierarchical.log`
 - signature: `Data/FNSPID/cache/selected_signatures/paper_fold1_signature.json`
 - text_state: `Data/FNSPID/cache/selected_signatures/paper_fold1_text_state.npz`
+- architecture_report: [architecture_and_loss_report.md](architecture_and_loss_report.md)
+- loss_curves: [loss_curves.png](loss_curves.png)
+
