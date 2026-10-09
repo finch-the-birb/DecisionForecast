@@ -39,6 +39,7 @@ class DLinear(nn.Module):
         super().__init__()
         if not 0 <= target_idx < n_features:
             raise ValueError(f"target_idx={target_idx} not in [0, {n_features})")
+        self.n_features = n_features
         self.target_idx = target_idx
         self.moving_avg = _MovingAvg(kernel_size)
         self.linear_seasonal = nn.Linear(seq_len, horizon)
@@ -49,9 +50,12 @@ class DLinear(nn.Module):
         x: torch.Tensor,
         text: torch.Tensor | None = None,
         text_seq: torch.Tensor | None = None,
+        ts: torch.Tensor | None = None,
         **_kwargs,
     ) -> ModelOutput:
         del text, text_seq, _kwargs
+        if ts is not None and x.size(-1) + ts.size(-1) == self.n_features:
+            x = torch.cat([x, ts], dim=-1)
         trend = self.moving_avg(x)
         seasonal = x - trend
         # [B, T, C] -> [B, C, T] -> linear on time -> [B, C, H] -> [B, H, C]

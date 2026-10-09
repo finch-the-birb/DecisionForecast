@@ -142,6 +142,8 @@ class TimeXerHierarchical(nn.Module):
         self.fft = PatchFFT()
         self.g_text = nn.Linear(self.text_dim, d_model)
         self.g_ts = nn.Linear(self.n_ts_features, d_model)
+        self.text_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.ts_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
         self.layer_ts = _ModalityEncoderLayer(d_model, n_heads, d_ff, dropout)
         self.layer_text = _ModalityEncoderLayer(d_model, n_heads, d_ff, dropout)
         if self.use_prototypes:
@@ -189,9 +191,9 @@ class TimeXerHierarchical(nn.Module):
         if text_mode != "none":
             text_in = apply_feature_ablation(text_in, text_mode, ablation_generator)
         text_exo = self.g_text(text_in)
-        g_text = text_exo.mean(dim=1, keepdim=True)
         ts_exo = self._project_ts(ts)
-        g_ts = ts_exo.mean(dim=1, keepdim=True)
+        g_ts = self.ts_token.expand(x.size(0), -1, -1)
+        g_text = self.text_token.expand(x.size(0), -1, -1)
         patches, g_ts = self.layer_ts(patches, g_ts, ts_exo)
         patches, g_text = self.layer_text(patches, g_text, text_exo)
         bank = patches

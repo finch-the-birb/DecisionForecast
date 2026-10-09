@@ -123,6 +123,7 @@ class TimeXerInverted(nn.Module):
         self.fft = PatchFFT()
         self.variate_proj = nn.Linear(self.seq_len, d_model)
         self.g_text = nn.Linear(self.text_dim, d_model)
+        self.text_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
         self.layers = nn.ModuleList(
             [_InvertedLayer(d_model, n_heads, d_ff, dropout) for _ in range(e_layers)]
         )
@@ -170,7 +171,7 @@ class TimeXerInverted(nn.Module):
         patches = self._embed_patches(x)
         variates = self.variate_proj(indicators.transpose(1, 2))
         text_exo = self.g_text(text_in)
-        g_text = text_exo.mean(dim=1, keepdim=True)
+        g_text = self.text_token.expand(x.size(0), -1, -1)
         for layer in self.layers:
             patches, g_text = layer(patches, g_text, text_exo, variates)
         bank = patches

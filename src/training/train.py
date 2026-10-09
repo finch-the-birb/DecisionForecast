@@ -87,10 +87,19 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_pool=head_pool,
         )
     if name == "dlinear":
+        dl_n_features = n_features
+        declared = cfg.model.get("n_features", None)
+        if declared is not None:
+            dl_n_features = int(declared)
+        elif str(cfg.data.get("features_mode", "")) == "dual_ts":
+            n_ts = int(cfg.model.get("n_ts_features", 25))
+            dl_n_features = n_features + n_ts
+        elif str(cfg.data.get("features_mode", "")) == "selected_40d":
+            dl_n_features = 26
         return DLinear(
             seq_len=int(cfg.data.lookback_T),
             horizon=int(cfg.data.horizon),
-            n_features=n_features,
+            n_features=dl_n_features,
             target_idx=target_idx,
             kernel_size=int(cfg.model.get("kernel_size", 25)),
         )

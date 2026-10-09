@@ -90,8 +90,6 @@ class _DualEncoderLayer(nn.Module):
         ts_exo: torch.Tensor | None,
         mask: torch.Tensor,
     ) -> torch.Tensor:
-        mixed, _weights = self.self_attn(tokens, tokens, tokens, attn_mask=mask, need_weights=False)
-        tokens = self.norm_attn(tokens + self.dropout(mixed))
         patches, g_ts, g_text = _split_tokens(tokens)
         if ts_exo is not None and ts_exo.size(1) > 0:
             delta, _weights = self.cross_ts(g_ts, ts_exo, ts_exo, need_weights=False)
@@ -100,6 +98,8 @@ class _DualEncoderLayer(nn.Module):
             delta, _weights = self.cross_text(g_text, text_exo, text_exo, need_weights=False)
             g_text = self.norm_text(g_text + self.dropout(delta))
         tokens = torch.cat([patches, g_ts, g_text], dim=1)
+        mixed, _weights = self.self_attn(tokens, tokens, tokens, attn_mask=mask, need_weights=False)
+        tokens = self.norm_attn(tokens + self.dropout(mixed))
         tokens = self.norm_ff(tokens + self.ff(tokens))
         patches, g_ts, g_text = _split_tokens(tokens)
         patches = self.bridge(patches, g_ts, g_text)
@@ -162,7 +162,8 @@ class TimeXerDual(nn.Module):
         self.fft = PatchFFT()
         self.g_text = nn.Linear(self.text_dim, d_model)
         self.g_ts = nn.Linear(self.n_ts_features, d_model) if self.n_ts_features > 0 else None
-        self.ts_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.text_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.ts_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
         self.layers = nn.ModuleList(
             [_DualEncoderLayer(d_model, n_heads, d_ff, dropout) for _ in range(e_layers)]
         )
@@ -211,9 +212,9 @@ class TimeXerDual(nn.Module):
         if text_mode != "none":
             text_in = apply_feature_ablation(text_in, text_mode, ablation_generator)
         text_exo = self.g_text(text_in)
-        g_text = text_exo.mean(dim=1, keepdim=True)
         ts_exo = self._project_ts(ts, x.size(0), x.device, x.dtype)
-        g_ts = ts_exo.mean(dim=1, keepdim=True) if ts_exo is not None else self.ts_token.expand(x.size(0), -1, -1)
+        g_text = self.text_token.expand(x.size(0), -1, -1)
+        g_ts = self.ts_token.expand(x.size(0), -1, -1)
         tokens = torch.cat([patches, g_ts, g_text], dim=1)
         mask = dual_attention_mask(self.n_patches, tokens.device, tokens.dtype)
         for layer in self.layers:
