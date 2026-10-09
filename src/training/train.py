@@ -363,12 +363,19 @@ def _forecast_forward(
 
 
 @torch.no_grad()
-def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> dict[str, float]:
+def evaluate(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    close_idx: int = 0,
+) -> dict[str, float]:
     model.eval()
     preds: list[torch.Tensor] = []
     targets: list[torch.Tensor] = []
     y_means: list[torch.Tensor] = []
     y_stds: list[torch.Tensor] = []
+    last_closes: list[torch.Tensor] = []
+    idx = getattr(model, "close_idx", getattr(model, "target_idx", close_idx))
     for batch in loader:
         x, y, text, text_seq, ts = _forecast_inputs(batch, device)
         out = _forecast_forward(model, x, text, text_seq, ts)
@@ -378,13 +385,19 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
         if "y_mean" in batch:
             y_means.append(batch["y_mean"].cpu())
             y_stds.append(batch["y_std"].cpu())
+        last_closes.append(x[:, -1, idx].cpu())
     pred_cat = torch.cat(preds)
     tgt_cat = torch.cat(targets)
+    lc_cat = torch.cat(last_closes) if last_closes else None
     if y_means:
         return compute_metrics(
-            pred_cat, tgt_cat, torch.cat(y_means), torch.cat(y_stds)
+            pred_cat,
+            tgt_cat,
+            torch.cat(y_means),
+            torch.cat(y_stds),
+            last_close=lc_cat,
         )
-    return compute_metrics(pred_cat, tgt_cat)
+    return compute_metrics(pred_cat, tgt_cat, last_close=lc_cat)
 
 
 def run_training(cfg: DictConfig) -> dict[str, float]:
@@ -622,9 +635,10 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     proto_pair = float(model.proto.pairwise_min_dist())
                     if init_bank is not None:
                         proto_nn = float(model.proto.nn_dist_mean(init_bank.to(device)))
+                da_val_str = f" val_da={val_metrics['da']:.4f}" if "da" in val_metrics else ""
                 log.info(
                     "Epoch %d — train_loss=%.4f l_pred=%.4f l_c=%.4f l_e=%.4f l_d=%.4f "
-                    "val_mse=%.4f val_mae=%.4f proto_nn_dist_mean=%s proto_min_pairwise_dist=%s",
+                    "val_mse=%.4f val_mae=%.4f%s proto_nn_dist_mean=%s proto_min_pairwise_dist=%s",
                     epoch,
                     avg_loss,
                     avg_lp,
@@ -633,6 +647,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     avg_ld,
                     val_metrics["mse"],
                     val_metrics["mae"],
+                    da_val_str,
                     f"{proto_nn:.4f}" if proto_nn == proto_nn else "n/a",
                     f"{proto_pair:.4f}" if proto_pair == proto_pair else "n/a",
                 )
@@ -646,6 +661,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         "val_mse": val_metrics["mse"],
                         "val_mae": val_metrics["mae"],
                     }
+                    if "da" in val_metrics:
+                        row["val_da"] = val_metrics["da"]
                     if "mae_denorm" in val_metrics:
                         row["val_mae_denorm"] = val_metrics["mae_denorm"]
                     if proto_nn == proto_nn:
@@ -679,40 +696,51 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True))
 
         test_metrics = evaluate(model, test_loader, device)
-        log.info("Test — mse=%.4f mae=%.4f mae_denorm=%s", test_metrics["mse"], test_metrics["mae"], f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a")
+        da_test_str = f" da={test_metrics['da']:.4f}" if "da" in test_metrics else ""
         log.info(
-            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f mae_denorm=%s",
-            cfg.model.name,
-            cfg.data.horizon,
+            "Test — mse=%.4f mae=%.4f%s mae_denorm=%s",
             test_metrics["mse"],
             test_metrics["mae"],
+            da_test_str,
             f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
         )
         log.info(
-            "H1_ROW model=%s horizon=%s mse=%.4f mae=%.4f",
+            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f%s mae_denorm=%s",
             cfg.model.name,
             cfg.data.horizon,
             test_metrics["mse"],
             test_metrics["mae"],
+            da_test_str,
+            f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
+        )
+        log.info(
+            "H1_ROW model=%s horizon=%s mse=%.4f mae=%.4f%s",
+            cfg.model.name,
+            cfg.data.horizon,
+            test_metrics["mse"],
+            test_metrics["mae"],
+            da_test_str,
         )
         metrics_path = Path(cfg.paths.output_dir) / "metrics.json"
+        metrics_dict = {
+            "model": str(cfg.model.name),
+            "horizon": int(cfg.data.horizon),
+            "seed": int(cfg.train.seed),
+            "normalize": str(cfg.data.get("normalize")),
+            "mse": test_metrics["mse"],
+            "mae": test_metrics["mae"],
+            "mae_denorm": test_metrics.get("mae_denorm"),
+        }
+        if "da" in test_metrics:
+            metrics_dict["da"] = test_metrics["da"]
         metrics_path.write_text(
-            json.dumps(
-                {
-                    "model": str(cfg.model.name),
-                    "horizon": int(cfg.data.horizon),
-                    "seed": int(cfg.train.seed),
-                    "normalize": str(cfg.data.get("normalize")),
-                    "mse": test_metrics["mse"],
-                    "mae": test_metrics["mae"],
-                    "mae_denorm": test_metrics.get("mae_denorm"),
-                },
-                indent=2,
-            ),
+            json.dumps(metrics_dict, indent=2),
             encoding="utf-8",
         )
         if mlflow_enabled:
             test_log = {"test_mse": test_metrics["mse"], "test_mae": test_metrics["mae"]}
+            if "da" in test_metrics:
+                test_log["test_da"] = test_metrics["da"]
             if "mae_denorm" in test_metrics:
                 test_log["test_mae_denorm"] = test_metrics["mae_denorm"]
             mlflow.log_metrics(test_log)
