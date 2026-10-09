@@ -404,7 +404,7 @@ def _block_becker(
         roll = dict(window=window, min_periods=window, center=False)
         rsv_minus = neg_ret_sq.rolling(**roll).sum()
         rsv_plus = pos_ret_sq.rolling(**roll).sum()
-        rsv_ratio = rsv_minus / (rsv_plus + eps)
+        rsv_ratio = np.clip(rsv_minus / (rsv_plus + 1e-4), 0.0, 50.0)
 
         roll_min = low.rolling(**roll).min()
         roll_max = high.rolling(**roll).max()
@@ -414,7 +414,8 @@ def _block_becker(
         ema_c = _ema(close, window)
         above_ema = (close > ema_c).astype(np.float64)
         frac_above = above_ema.rolling(**roll).mean()
-        columns[f"cfi_n{window}"] = rsv_ratio * exp_pos * frac_above
+        cfi_val = rsv_ratio * exp_pos * frac_above
+        columns[f"cfi_n{window}"] = np.clip(cfi_val, 0.0, 50.0)
 
     # 4. Market Resiliency Deficit (MRD)
     for window in windows:

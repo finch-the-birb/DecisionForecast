@@ -95,3 +95,26 @@ def test_dataset_window_keeps_close_stats_for_the_target() -> None:
     assert float(item["y_mean"]) == 10.0
     assert float(item["y_std"]) == 1.0
     assert item["y"].shape == (2,)
+
+
+def test_bounded_columns_including_cfi_stay_in_unit_range() -> None:
+    from src.data.selective_norm import _normalize_column
+
+    # Test direct _normalize_column behavior
+    arr = np.array([-50.0, -1.0, 0.0, 0.5, 1.0, 50.0])
+    clipped = _normalize_column(arr, "bounded")
+    np.testing.assert_allclose(clipped, [-1.0, -1.0, 0.0, 0.5, 1.0, 1.0])
+
+    # Test through apply_static_and_robust with cfi, mrd, cgo
+    names = ["cfi_n3", "mrd_n20", "cgo_n40", "close"]
+    vals = np.array(
+        [
+            [100.0, 5.0, -10.0, 50.0],
+            [0.0, 0.5, 0.2, 51.0],
+            [25.0, -2.0, 1.5, 52.0],
+        ]
+    )
+    scaled = apply_static_and_robust(vals, names, np.ones(len(vals), dtype=bool))
+    assert np.max(np.abs(scaled[:, :3])) <= 1.0
+    roles = feature_roles(names)
+    assert roles == ("bounded", "bounded", "bounded", "level")

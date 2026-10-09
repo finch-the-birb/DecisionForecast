@@ -19,8 +19,8 @@ n_heads: 4
 e_layers: 1
 dropout: 0.1
 text_dim: 15
-n_features: 5
-n_ts_features: 0
+n_features: 2
+n_ts_features: 25
 
 use_prototypes: false
 n_prototypes: 10

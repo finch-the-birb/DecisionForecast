@@ -14,7 +14,7 @@ IQR_FLOOR = 1e-8
 
 LEVEL_COLUMNS = frozenset({"close", "open", "high", "low", "vwap"})
 CALENDAR_PREFIXES = ("day_sin", "day_cos", "month_sin", "month_cos")
-BOUNDED_PREFIXES = ("mrd_", "cgo_")
+BOUNDED_PREFIXES = ("mrd_", "cgo_", "cfi_")
 BOUNDED_COLUMNS = BOUNDED_PREFIXES
 STATIONARY_PREFIXES = (
     "log_ret_",
@@ -26,8 +26,18 @@ STATIONARY_PREFIXES = (
     "obv_z_",
     "eii_",
     "queue_acc_",
-    "cfi_",
 )
+
+
+def _normalize_column(val: np.ndarray, role: str) -> np.ndarray:
+    """Normalize a column based on its role."""
+    if role == "rsi":
+        return (val - 50.0) / 50.0
+    if role == "pctb":
+        return (val - 0.5) * 2.0
+    if role == "bounded":
+        return np.clip(val, -1.0, 1.0)
+    return val
 
 
 def feature_role(name: str) -> str:
@@ -60,7 +70,7 @@ def apply_static_and_robust(
     """Scale non-level columns. Price levels stay raw for window RevIN.
 
     RSI maps ``[0, 100]`` to ``[-1, 1]``. Bollinger %B maps ``[0, 1]`` to
-    ``[-1, 1]``. Bounded columns (mrd, cgo) are clamped to ``[-1, 1]``.
+    ``[-1, 1]``. Bounded columns (mrd, cgo, cfi) are clamped to ``[-1, 1]``.
     Calendar sines and cosines are copied. Every other column uses the
     train-row median and IQR. A zero IQR becomes 1, so a flat train
     stretch stays finite.
@@ -83,12 +93,8 @@ def apply_static_and_robust(
         iqr = np.where((q75 - q25) < IQR_FLOOR, 1.0, q75 - q25)
         out[:, stat_idx] = (out[:, stat_idx] - median) / iqr
     for index, role in enumerate(roles):
-        if role == "rsi":
-            out[:, index] = (out[:, index] - 50.0) / 50.0
-        elif role == "pctb":
-            out[:, index] = (out[:, index] - 0.5) * 2.0
-        elif role == "bounded":
-            out[:, index] = np.clip(out[:, index], -1.0, 1.0)
+        if role in ("rsi", "pctb", "bounded"):
+            out[:, index] = _normalize_column(out[:, index], role)
     return out
 
 

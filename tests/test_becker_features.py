@@ -175,30 +175,64 @@ def test_selective_norm_typing() -> None:
 
     for w in WINDOWS:
         assert feature_role(f"queue_acc_n{w}") == "stationary"
-        assert feature_role(f"cfi_n{w}") == "stationary"
+        assert feature_role(f"cfi_n{w}") == "bounded"
+        assert feature_role(f"cfi_n{w}_lag1") == "bounded"
+        assert feature_role(f"cfi_n{w}_delta") == "bounded"
         assert feature_role(f"mrd_n{w}") == "bounded"
         assert feature_role(f"cgo_n{w}") == "bounded"
         assert feature_role(f"mrd_n{w}_lag2") == "bounded"
         assert feature_role(f"cgo_n{w}_delta") == "bounded"
 
     # Test static bounded clipping in [-1, 1]
-    cols = ["mrd_n5", "cgo_n10", "eii_n5", "close"]
+    cols = ["mrd_n5", "cgo_n10", "cfi_n3", "eii_n5", "close"]
     vals = np.array(
         [
-            [2.5, -3.0, 10.0, 50.0],
-            [0.5, 0.2, 5.0, 51.0],
-            [-0.5, 0.8, -2.0, 52.0],
-            [1.0, 1.0, 0.0, 53.0],
+            [2.5, -3.0, 50.0, 10.0, 50.0],
+            [0.5, 0.2, 0.0, 5.0, 51.0],
+            [-0.5, 0.8, -10.0, -2.0, 52.0],
+            [1.0, 1.0, 1.5, 0.0, 53.0],
         ]
     )
     mask = np.ones(len(vals), dtype=bool)
     scaled = apply_static_and_robust(vals, cols, mask)
 
-    # mrd and cgo are bounded
+    # mrd, cgo, and cfi are bounded in [-1, 1]
     assert (scaled[:, 0] <= 1.0).all() and (scaled[:, 0] >= -1.0).all()
     assert (scaled[:, 1] <= 1.0).all() and (scaled[:, 1] >= -1.0).all()
+    assert (scaled[:, 2] <= 1.0).all() and (scaled[:, 2] >= -1.0).all()
     # close is level (unmodified by static/robust)
-    np.testing.assert_allclose(scaled[:, 3], vals[:, 3])
+    np.testing.assert_allclose(scaled[:, 4], vals[:, 4])
+
+
+def test_cfi_bounds_and_no_explosions() -> None:
+    """Test that extreme downside moves do not explode CFI, bounded in [0, 50] and [-1, 1]."""
+    n = 30
+    dates = pd.bdate_range("2021-01-04", periods=n)
+    # Monotonically dropping prices with zero positive returns (rsv_plus == 0)
+    close = np.linspace(100.0, 10.0, n)
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "open": close + 0.5,
+            "high": close + 1.0,
+            "low": close - 0.5,
+            "close": close,
+            "volume": np.full(n, 1000.0),
+        }
+    )
+    feats = compute_technical_features(df)
+    cfi_n3 = feats["cfi_n3"].dropna()
+    assert (cfi_n3 >= 0.0).all()
+    assert (cfi_n3 <= 50.0).all()
+
+    # When scaled through selective norm, bounded strictly in [-1, 1]
+    scaled = apply_static_and_robust(
+        feats[["cfi_n3"]].dropna().to_numpy(),
+        ["cfi_n3"],
+        np.ones(len(cfi_n3), dtype=bool),
+    )
+    assert (scaled >= -1.0).all() and (scaled <= 1.0).all()
+    assert not np.isnan(scaled).any()
 
 
 def test_selection_integration_with_becker_features() -> None:

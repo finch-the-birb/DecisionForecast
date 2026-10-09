@@ -126,6 +126,8 @@ def test_prototypes_switch_and_hydra_build() -> None:
                 "model.e_layers=2",
                 "model.d_model=128",
                 "data.patch_stride=12",
+                "model.n_features=5",
+                "model.n_ts_features=0",
             ],
         )
     assert cfg.data.normalize == "selective"
@@ -202,7 +204,15 @@ def test_dual_ts_config_builds_f1_f2_and_f5() -> None:
     GlobalHydra.instance().clear()
     cfg_dir = str(Path(__file__).resolve().parents[1] / "configs")
     with initialize_config_dir(version_base=None, config_dir=cfg_dir):
-        blocked = compose(config_name="config", overrides=["model=c1_dual", "data=fnspid_dual_ts"])
+        blocked = compose(
+            config_name="config",
+            overrides=[
+                "model=c1_dual",
+                "data=fnspid_dual_ts",
+                "model.n_features=5",
+                "model.n_ts_features=0",
+            ],
+        )
         mismatch = compose(
             config_name="config",
             overrides=[
@@ -234,7 +244,11 @@ def test_dual_ts_config_builds_f1_f2_and_f5() -> None:
         )
         f5 = compose(
             config_name="config",
-            overrides=["model=c1_dual", "data=fnspid_dual_ts", "model.n_ts_features=25"],
+            overrides=[
+                "model=c1_dual",
+                "data=fnspid_dual_ts",
+                "model.n_features=5",
+            ],
         )
     assert blocked.data.features_mode == "dual_ts"
     assert blocked.data.normalize == "selective"
