@@ -35,6 +35,7 @@ import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
 WINDOWS: tuple[int, ...] = (3, 5, 10, 20, 40, 60)
+EII_WINDOWS: tuple[int, ...] = (5, 10, 20, 40)
 RETURN_LAGS: tuple[int, ...] = (1, 2, 3, 5, 10, 20, 60)
 FEATURE_LAGS: tuple[int, ...] = (1, 2, 3)
 EPS: float = 1e-8
@@ -51,9 +52,14 @@ _CALENDAR_COLUMNS = ("day_sin", "day_cos", "month_sin", "month_cos")
 def base_feature_names(
     windows: Sequence[int] = WINDOWS,
     return_lags: Sequence[int] = RETURN_LAGS,
+    eii_windows: Sequence[int] | None = None,
 ) -> list[str]:
     """Names of the base indicators, before lag and delta expansion."""
     windows, return_lags = _windows_and_returns(windows, return_lags)
+    if eii_windows is None:
+        eii_win = tuple(w for w in windows if w in EII_WINDOWS) or tuple(windows)
+    else:
+        eii_win = _as_unique_ints(eii_windows, "eii_windows", minimum=2)
     names: list[str] = [f"log_ret_k{k}" for k in return_lags]
     names += ["intraday_ret", "body_range"]
     names += [f"parkinson_n{n}" for n in windows]
@@ -66,6 +72,12 @@ def base_feature_names(
     names += [f"vwap_spread_n{n}" for n in windows]
     names += [f"volume_z_n{n}" for n in windows]
     names += [f"obv_z_n{n}" for n in windows]
+    # Gary Becker (1991) externalities and microstructure features
+    names += [f"eii_n{n}" for n in eii_win]
+    names += [f"queue_acc_n{n}" for n in windows]
+    names += [f"cfi_n{n}" for n in windows]
+    names += [f"mrd_n{n}" for n in windows]
+    names += [f"cgo_n{n}" for n in windows]
     names += list(_CALENDAR_COLUMNS)
     return names
 
@@ -74,12 +86,17 @@ def technical_feature_names(
     windows: Sequence[int] = WINDOWS,
     return_lags: Sequence[int] = RETURN_LAGS,
     feature_lags: Sequence[int] = FEATURE_LAGS,
+    eii_windows: Sequence[int] | None = None,
 ) -> list[str]:
     """Column order produced by :func:`compute_technical_features`."""
     windows, return_lags = _windows_and_returns(windows, return_lags)
     feature_lags = _as_unique_ints(feature_lags, "feature_lags", minimum=1, allow_empty=True)
+    if eii_windows is None:
+        eii_win = tuple(w for w in windows if w in EII_WINDOWS) or tuple(windows)
+    else:
+        eii_win = _as_unique_ints(eii_windows, "eii_windows", minimum=2)
     names: list[str] = []
-    for base in base_feature_names(windows, return_lags):
+    for base in base_feature_names(windows, return_lags, eii_win):
         names.append(base)
         names.extend(f"{base}_lag{lag}" for lag in feature_lags)
         names.append(f"{base}_delta")
@@ -92,6 +109,7 @@ def compute_technical_features(
     windows: Sequence[int] = WINDOWS,
     return_lags: Sequence[int] = RETURN_LAGS,
     feature_lags: Sequence[int] = FEATURE_LAGS,
+    eii_windows: Sequence[int] | None = None,
     eps: float = EPS,
 ) -> pd.DataFrame:
     """Causal OHLCV features aligned to ``frame``.
@@ -111,12 +129,16 @@ def compute_technical_features(
         raise ValueError("eps must be positive")
     windows, return_lags = _windows_and_returns(windows, return_lags)
     feature_lags = _as_unique_ints(feature_lags, "feature_lags", minimum=1, allow_empty=True)
+    if eii_windows is None:
+        eii_win = tuple(w for w in windows if w in EII_WINDOWS) or tuple(windows)
+    else:
+        eii_win = _as_unique_ints(eii_windows, "eii_windows", minimum=2)
     ohlcv, dates = _prepare_inputs(frame)
-    base = _base_features(ohlcv, dates, windows, return_lags, eps)
-    if list(base.columns) != base_feature_names(windows, return_lags):
+    base = _base_features(ohlcv, dates, windows, return_lags, eps, eii_win)
+    if list(base.columns) != base_feature_names(windows, return_lags, eii_win):
         raise RuntimeError("base feature inventory does not match base_feature_names")
     expanded = _expand_lags(base, feature_lags)
-    expected = technical_feature_names(windows, return_lags, feature_lags)
+    expected = technical_feature_names(windows, return_lags, feature_lags, eii_win)
     if list(expanded.columns) != expected:
         raise RuntimeError("expanded feature inventory does not match technical_feature_names")
     return expanded
@@ -188,6 +210,7 @@ def _base_features(
     windows: tuple[int, ...],
     return_lags: tuple[int, ...],
     eps: float,
+    eii_windows: tuple[int, ...] = EII_WINDOWS,
 ) -> pd.DataFrame:
     index = ohlcv.index
     open_ = ohlcv["open"]
@@ -200,8 +223,9 @@ def _base_features(
     columns.update(_block_volatility(open_, high, low, close, windows))
     columns.update(_block_momentum(close, windows, eps))
     columns.update(_block_volume(high, low, close, volume, windows, eps))
+    columns.update(_block_becker(open_, high, low, close, volume, windows, eii_windows, eps))
     columns.update(_block_calendar(dates, index))
-    names = base_feature_names(windows, return_lags)
+    names = base_feature_names(windows, return_lags, eii_windows)
     missing = [name for name in names if name not in columns]
     extra = [name for name in columns if name not in names]
     if missing or extra:
@@ -314,6 +338,118 @@ def _block_calendar(dates: pd.Series, index: pd.Index) -> dict[str, pd.Series]:
     }
 
 
+def _block_becker(
+    open_: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    volume: pd.Series,
+    windows: tuple[int, ...],
+    eii_windows: tuple[int, ...],
+    eps: float,
+) -> dict[str, pd.Series]:
+    high_np = high.to_numpy(dtype=np.float64)
+    low_np = low.to_numpy(dtype=np.float64)
+    close_np = close.to_numpy(dtype=np.float64)
+    open_np = open_.to_numpy(dtype=np.float64)
+    vol_np = volume.to_numpy(dtype=np.float64)
+
+    # Garman-Klass volatility bar series (sigma_GK_N)
+    hl = np.log(high_np / low_np)
+    co = np.log(close_np / open_np)
+    gk_bar = pd.Series(0.5 * hl**2 - (2.0 * np.log(2.0) - 1.0) * co**2, index=close.index)
+
+    # Intraday candle body, range, and direction
+    body = (close - open_).abs()
+    candle_range = high - low
+    body_to_range = body / (candle_range + eps)
+    direction = pd.Series(np.sign(close_np - open_np), index=close.index, dtype=np.float64)
+
+    # Log-returns for semivariance (CFI)
+    log_close = pd.Series(np.log(close_np), index=close.index)
+    log_ret = log_close.diff()
+    neg_ret_sq = (log_ret.clip(upper=0.0)) ** 2
+    pos_ret_sq = (log_ret.clip(lower=0.0)) ** 2
+
+    # True range for ATR (Q)
+    true_range = _true_range(high, low, close)
+    overnight_raw = open_ - close.shift(1)
+
+    # Typical price and volume for decayed VWAP (CGO)
+    typical = (high + low + close) / 3.0
+    typical_vol_np = (typical * volume).to_numpy(dtype=np.float64)
+
+    columns: dict[str, pd.Series] = {}
+
+    # 1. Endogenous Inelasticity Index (EII)
+    for window in eii_windows:
+        roll = dict(window=window, min_periods=window, center=False)
+        sma_v = volume.rolling(**roll).mean()
+        gk_vol = gk_bar.rolling(**roll).mean().clip(lower=0.0).pow(0.5)
+        rel_vol_log = np.log1p(volume / (sma_v + eps))
+        columns[f"eii_n{window}"] = direction * body_to_range * rel_vol_log / (gk_vol + eps)
+
+    # 2. Unmet Demand / Queue Accumulator (Q)
+    for window in windows:
+        roll = dict(window=window, min_periods=window, center=False)
+        roll_med_v = volume.rolling(**roll).median()
+        pinning = ((2.0 * close - (high + low)) / (candle_range + eps)) * (volume / (roll_med_v + eps))
+        pinning_ema = _ema(pinning, window, min_periods=1)
+        atr = true_range.rolling(**roll).mean()
+        overnight_norm = overnight_raw / (atr + eps)
+        columns[f"queue_acc_n{window}"] = pinning_ema + overnight_norm
+
+    # 3. Crash Fragility Index (CFI)
+    for window in windows:
+        roll = dict(window=window, min_periods=window, center=False)
+        rsv_minus = neg_ret_sq.rolling(**roll).sum()
+        rsv_plus = pos_ret_sq.rolling(**roll).sum()
+        rsv_ratio = rsv_minus / (rsv_plus + eps)
+
+        roll_min = low.rolling(**roll).min()
+        roll_max = high.rolling(**roll).max()
+        norm_pos = (close - roll_min) / (roll_max - roll_min + eps)
+        exp_pos = np.exp(norm_pos)
+
+        ema_c = _ema(close, window)
+        above_ema = (close > ema_c).astype(np.float64)
+        frac_above = above_ema.rolling(**roll).mean()
+        columns[f"cfi_n{window}"] = rsv_ratio * exp_pos * frac_above
+
+    # 4. Market Resiliency Deficit (MRD)
+    for window in windows:
+        roll = dict(window=window, min_periods=window, center=False)
+        sma_v = volume.rolling(**roll).mean()
+        vol_ratio = volume / (sma_v + eps)
+        instant_mrd = body_to_range * vol_ratio
+        columns[f"mrd_n{window}"] = _ema(instant_mrd, window, min_periods=1)
+
+    # 5. Capital Gains Overhang Proxy (CGO)
+    for window in windows:
+        decay_weights = np.array(
+            [(1.0 - 1.0 / float(window)) ** (window - 1 - j) for j in range(window)],
+            dtype=np.float64,
+        )
+        num = _rolling_weighted_sum(typical_vol_np, decay_weights)
+        den = _rolling_weighted_sum(vol_np, decay_weights)
+        vwap_decay = np.where(den > eps, num / (den + eps), close_np)
+        cgo = (close_np - vwap_decay) / (close_np + eps)
+        columns[f"cgo_n{window}"] = pd.Series(cgo, index=close.index, dtype=np.float64)
+
+    return columns
+
+
+def _rolling_weighted_sum(values: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """Right-aligned causal weighted sum over a sliding window of length len(weights)."""
+    n = len(weights)
+    out = np.full(len(values), np.nan, dtype=np.float64)
+    if len(values) < n:
+        return out
+    conv = np.convolve(values, weights[::-1], mode="valid")
+    out[n - 1 :] = conv
+    return out
+
+
 def _expand_lags(base: pd.DataFrame, feature_lags: tuple[int, ...]) -> pd.DataFrame:
     expanded: dict[str, pd.Series] = {}
     for name in base.columns:
@@ -325,9 +461,10 @@ def _expand_lags(base: pd.DataFrame, feature_lags: tuple[int, ...]) -> pd.DataFr
     return pd.DataFrame(expanded, index=base.index, dtype=np.float64)
 
 
-def _ema(series: pd.Series, span: int) -> pd.Series:
+def _ema(series: pd.Series, span: int, min_periods: int | None = None) -> pd.Series:
     """Recursive span EMA. Leading gaps do not pull later observations back."""
-    return series.ewm(span=span, adjust=False, min_periods=span, ignore_na=False).mean()
+    periods = span if min_periods is None else int(min_periods)
+    return series.ewm(span=span, adjust=False, min_periods=periods, ignore_na=False).mean()
 
 
 def _macd_hist_norm(close: pd.Series) -> pd.Series:

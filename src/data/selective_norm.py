@@ -14,6 +14,8 @@ IQR_FLOOR = 1e-8
 
 LEVEL_COLUMNS = frozenset({"close", "open", "high", "low", "vwap"})
 CALENDAR_PREFIXES = ("day_sin", "day_cos", "month_sin", "month_cos")
+BOUNDED_PREFIXES = ("mrd_", "cgo_")
+BOUNDED_COLUMNS = BOUNDED_PREFIXES
 STATIONARY_PREFIXES = (
     "log_ret_",
     "parkinson_",
@@ -22,11 +24,14 @@ STATIONARY_PREFIXES = (
     "bb_width_",
     "volume_z_",
     "obv_z_",
+    "eii_",
+    "queue_acc_",
+    "cfi_",
 )
 
 
 def feature_role(name: str) -> str:
-    """Return ``level``, ``rsi``, ``pctb``, ``calendar``, or ``stationary``."""
+    """Return ``level``, ``rsi``, ``pctb``, ``calendar``, ``bounded``, or ``stationary``."""
     column = str(name)
     if column in LEVEL_COLUMNS:
         return "level"
@@ -36,6 +41,8 @@ def feature_role(name: str) -> str:
         return "pctb"
     if column.startswith(CALENDAR_PREFIXES):
         return "calendar"
+    if column.startswith(BOUNDED_PREFIXES) or column in BOUNDED_COLUMNS:
+        return "bounded"
     if column.startswith(STATIONARY_PREFIXES):
         return "stationary"
     return "stationary"
@@ -53,9 +60,10 @@ def apply_static_and_robust(
     """Scale non-level columns. Price levels stay raw for window RevIN.
 
     RSI maps ``[0, 100]`` to ``[-1, 1]``. Bollinger %B maps ``[0, 1]`` to
-    ``[-1, 1]``. Calendar sines and cosines are copied. Every other column
-    uses the train-row median and IQR. A zero IQR becomes 1, so a flat
-    train stretch stays finite.
+    ``[-1, 1]``. Bounded columns (mrd, cgo) are clamped to ``[-1, 1]``.
+    Calendar sines and cosines are copied. Every other column uses the
+    train-row median and IQR. A zero IQR becomes 1, so a flat train
+    stretch stays finite.
     """
     out = np.asarray(values, dtype=np.float64).copy()
     roles = feature_roles(names)
@@ -79,6 +87,8 @@ def apply_static_and_robust(
             out[:, index] = (out[:, index] - 50.0) / 50.0
         elif role == "pctb":
             out[:, index] = (out[:, index] - 0.5) * 2.0
+        elif role == "bounded":
+            out[:, index] = np.clip(out[:, index], -1.0, 1.0)
     return out
 
 
