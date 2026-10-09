@@ -10,12 +10,25 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
-from src.data.collate import forecast_collate
+from src.data.collate import make_forecast_loader
 from src.data.dataset import build_datasets, log_text_coverage
 from src.evaluation.metrics import compute_metrics
 from src.explain.h3 import write_h3_artifacts
+from src.models.dlinear import DLinear
+from src.models.fusion import loggable_fusion
+from src.models.timexer_b import TimeXerB
+from src.models.timexer_c0 import TimeXerC0
+from src.models.timexer_c1 import TimeXerC1
+from src.models.timexer_c1_compact import TimeXerC1Compact
+from src.models.timexer_dual import TimeXerDual
+from src.models.timexer_factored import TimeXerFactored
+from src.models.timexer_hierarchical import TimeXerHierarchical
+from src.models.timexer_inverted import TimeXerInverted
+from src.models.timexer_late_fusion import TimeXerLateFusion
+from src.models.timexer_plain import TimeXerPlain
+from src.models.timexer_selected import TimeXerSelected
 from src.models.timexl_a import TimeXLModelA
-from src.models.timexl_integration import TimeXerFusionModel
+from src.explain.bank import collect_segment_bank
 from src.utils.device import log_cuda_memory, log_torch_device, resolve_device
 from src.utils.mlflow_helpers import log_cfg_params
 from src.utils.seed import set_seed
@@ -31,14 +44,32 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
     n_features = len(cfg.data.features)
     features = [str(f) for f in cfg.data.features]
     target = str(cfg.data.target)
-    try:
-        target_idx = features.index(target)
-    except ValueError as exc:
-        raise ValueError(f"target {target!r} not in features {features}") from exc
     name = str(cfg.model.name)
+    if target in features:
+        target_idx = features.index(target)
+    elif name == "dlinear":
+        raise ValueError(
+            f"target {target!r} not in features; DLinear reads that channel from x. Use data=fnspid."
+        )
+    elif str(cfg.data.get("features_mode", "ohlcv")) != "selected_40d":
+        raise ValueError(f"target {target!r} not in features {features}")
+    else:
+        target_idx = 0
+    if name == "timexer_selected" and (n_features != 26 or int(cfg.model.get("text_dim", 15)) != 15):
+        raise ValueError(
+            "timexer_selected expects 26 channels (close plus 25 indicators) and text_dim 15, "
+            f"got n_features={n_features} text_dim={int(cfg.model.get('text_dim', 15))}"
+        )
+    seq_len = int(cfg.data.lookback_T)
+    head_cfg = cfg.model.get("head", {})
+    head_type = str(head_cfg.get("type", "linear"))
+    head_hidden = int(head_cfg.get("hidden", 128))
+    head_dropout = float(head_cfg.get("dropout", 0.0))
+    head_pool = str(head_cfg.get("pool", "mean"))
     if name == "a":
         return TimeXLModelA(
             n_features=n_features,
+            seq_len=seq_len,
             horizon=int(cfg.data.horizon),
             d_model=int(cfg.model.d_model),
             n_prototypes=int(cfg.model.n_prototypes),
@@ -49,14 +80,51 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             cnn_kernel=int(cfg.model.cnn.kernel_size),
             text_dim=int(cfg.data.text.dim),
             text_hidden=int(cfg.model.text_mlp.hidden),
-            head_hidden=int(cfg.model.head.hidden),
+            head_hidden=head_hidden,
+            fusion=cfg.model.fusion,
+            head_type=head_type,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
         )
-    if name in {"b", "c0", "c1"}:
-        return TimeXerFusionModel(
-            n_features=n_features,
+    if name == "dlinear":
+        dl_n_features = n_features
+        declared = cfg.model.get("n_features", None)
+        if declared is not None:
+            dl_n_features = int(declared)
+        elif str(cfg.data.get("features_mode", "")) == "dual_ts":
+            n_ts = int(cfg.model.get("n_ts_features", 25))
+            dl_n_features = n_features + n_ts
+        elif str(cfg.data.get("features_mode", "")) == "selected_40d":
+            dl_n_features = 26
+        return DLinear(
             seq_len=int(cfg.data.lookback_T),
             horizon=int(cfg.data.horizon),
+            n_features=dl_n_features,
             target_idx=target_idx,
+            kernel_size=int(cfg.model.get("kernel_size", 25)),
+        )
+    if name == "timexer_plain":
+        return TimeXerPlain(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_type=head_type,
+            head_hidden=head_hidden,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
+    if name == "b":
+        return TimeXerB(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
             d_model=int(cfg.model.d_model),
             n_prototypes=int(cfg.model.n_prototypes),
             d_min=float(cfg.model.d_min),
@@ -67,15 +135,231 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             dropout=float(cfg.model.dropout),
             text_dim=int(cfg.data.text.dim),
             text_hidden=int(cfg.model.text_mlp.hidden),
-            head_hidden=int(cfg.model.head.hidden),
-            fusion=str(cfg.model.fusion),
+            head_hidden=head_hidden,
+            fusion=cfg.model.fusion,
             d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
-            use_norm=bool(cfg.model.get("use_norm", False)),
-            use_prototypes=bool(cfg.model.get("use_prototypes", True)),
+            head_type=head_type,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
+    if name == "c0":
+        return TimeXerC0(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_prototypes=int(cfg.model.n_prototypes),
+            d_min=float(cfg.model.d_min),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=int(cfg.data.text.dim),
+            head_hidden=head_hidden,
+            fusion=cfg.model.fusion,
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_type=head_type,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
+    if name == "c1":
+        return TimeXerC1(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_prototypes=int(cfg.model.n_prototypes),
+            d_min=float(cfg.model.d_min),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=int(cfg.data.text.dim),
+            head_hidden=head_hidden,
+            fusion=cfg.model.fusion,
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_type=head_type,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
+    if name in {"c1_dual", "c1_hierarchical"}:
+        text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
+        if n_features not in (1, 2, 5) or text_dim != 15:
+            raise ValueError(
+                f"{name} expects 1, 2, or 5 endogenous channels and text_dim 15, "
+                f"got n_features={n_features} text_dim={text_dim}"
+            )
+        declared = cfg.model.get("n_features", None)
+        if declared is not None and int(declared) != n_features:
+            raise ValueError(
+                f"model.n_features={int(declared)} does not match {n_features} data channels"
+            )
+        n_ts_features = int(cfg.model.get("n_ts_features", 0))
+        if str(cfg.data.get("features_mode", "")) == "dual_ts" and n_ts_features != 25:
+            raise ValueError(
+                "data=fnspid_dual_ts requires model.n_ts_features=25, "
+                f"got {n_ts_features}"
+            )
+        d_model = int(cfg.model.d_model)
+        raw_d_ff = cfg.model.get("d_ff", None)
+        d_ff = 4 * d_model if raw_d_ff is None else int(raw_d_ff)
+        model_cls = TimeXerHierarchical if name == "c1_hierarchical" else TimeXerDual
+        return model_cls(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=d_model,
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=text_dim,
+            fusion=cfg.model.fusion,
+            n_ts_features=n_ts_features,
+            close_idx=features.index("close") if "close" in features else 0,
+            use_prototypes=bool(cfg.model.get("use_prototypes", False)),
+            n_prototypes=int(cfg.model.get("n_prototypes", 10)),
+            d_min=float(cfg.model.get("d_min", 0.5)),
+            d_ff=d_ff,
+            head_type=head_type,
+            head_hidden=head_hidden,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
+    if name == "c1_compact":
+        text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
+        if n_features != 5 or text_dim != 15:
+            raise ValueError(
+                "c1_compact expects 5 OHLCV channels and text_dim 15, "
+                f"got n_features={n_features} text_dim={text_dim}"
+            )
+        return TimeXerC1Compact(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=text_dim,
+            fusion=cfg.model.fusion,
+            use_prototypes=bool(cfg.model.get("use_prototypes", False)),
+            n_prototypes=int(cfg.model.get("n_prototypes", 10)),
+            d_min=float(cfg.model.get("d_min", 0.5)),
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_type=head_type,
+            head_hidden=head_hidden,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
+    if name in {"c1_factored", "c1_inverted", "c1_late_fusion"}:
+        text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
+        if n_features != 5 or text_dim != 15:
+            raise ValueError(
+                f"{name} expects 5 OHLCV channels and text_dim 15, "
+                f"got n_features={n_features} text_dim={text_dim}"
+            )
+        declared = cfg.model.get("n_features", None)
+        if declared is not None and int(declared) != n_features:
+            raise ValueError(
+                f"model.n_features={int(declared)} does not match {n_features} data channels"
+            )
+        n_ts_features = int(cfg.model.get("n_ts_features", 25))
+        if n_ts_features != 25:
+            raise ValueError(f"{name} requires model.n_ts_features=25, got {n_ts_features}")
+        d_model = int(cfg.model.d_model)
+        raw_d_ff = cfg.model.get("d_ff", None)
+        d_ff = 4 * d_model if raw_d_ff is None else int(raw_d_ff)
+        common = dict(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=d_model,
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=text_dim,
+            fusion=cfg.model.fusion,
+            n_ts_features=n_ts_features,
+            close_idx=features.index("close") if "close" in features else 0,
+            use_prototypes=bool(cfg.model.get("use_prototypes", False)),
+            n_prototypes=int(cfg.model.get("n_prototypes", 10)),
+            d_min=float(cfg.model.get("d_min", 0.5)),
+            d_ff=d_ff,
+            head_type=head_type,
+            head_hidden=head_hidden,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
+        )
+        if name == "c1_factored":
+            return TimeXerFactored(
+                n_patch_indicators=int(cfg.model.get("n_patch_indicators", 8)),
+                **common,
+            )
+        if name == "c1_inverted":
+            return TimeXerInverted(**common)
+        return TimeXerLateFusion(**common)
+    if name == "timexer_selected":
+        return TimeXerSelected(
+            n_features=n_features,
+            seq_len=seq_len,
+            horizon=int(cfg.data.horizon),
+            d_model=int(cfg.model.d_model),
+            n_heads=int(cfg.model.n_heads),
+            e_layers=int(cfg.model.e_layers),
+            patch_len=int(cfg.data.patch_len),
+            patch_stride=int(cfg.data.patch_stride),
+            dropout=float(cfg.model.dropout),
+            text_dim=int(cfg.model.get("text_dim", 15)),
+            fusion=cfg.model.fusion,
+            d_ff=int(cfg.model.get("d_ff", 4 * int(cfg.model.d_model))),
+            head_type=head_type,
+            head_hidden=head_hidden,
+            head_dropout=head_dropout,
+            head_pool=head_pool,
         )
     raise NotImplementedError(
-        f"Model '{name}' not implemented. Use model=a, b, c0, or c1."
+        "Model "
+        f"'{name}' not implemented. Use model=a, b, c0, c1, c1_compact, c1_dual, "
+        "c1_hierarchical, c1_factored, c1_inverted, c1_late_fusion, "
+        "timexer_plain, timexer_selected, or dlinear."
     )
+
+
+def _forecast_inputs(
+    batch: dict, device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    ts = batch.get("ts")
+    if isinstance(ts, torch.Tensor):
+        ts = ts.to(device)
+    else:
+        ts = None
+    return (
+        batch["x"].to(device),
+        batch["y"].to(device),
+        batch["text"].to(device),
+        batch["text_seq"].to(device),
+        ts,
+    )
+
+
+def _forecast_forward(
+    model: torch.nn.Module,
+    x: torch.Tensor,
+    text: torch.Tensor,
+    text_seq: torch.Tensor,
+    ts: torch.Tensor | None,
+):
+    if ts is None:
+        return model(x, text, text_seq=text_seq)
+    return model(x, text, text_seq=text_seq, ts=ts)
 
 
 @torch.no_grad()
@@ -83,15 +367,24 @@ def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
     model.eval()
     preds: list[torch.Tensor] = []
     targets: list[torch.Tensor] = []
+    y_means: list[torch.Tensor] = []
+    y_stds: list[torch.Tensor] = []
     for batch in loader:
-        x = batch["x"].to(device)
-        y = batch["y"].to(device)
-        text = batch["text"].to(device)
-        out = model(x, text)
-        pred = out.pred if hasattr(out, "pred") else out
+        x, y, text, text_seq, ts = _forecast_inputs(batch, device)
+        out = _forecast_forward(model, x, text, text_seq, ts)
+        pred = out.pred
         preds.append(pred.cpu())
         targets.append(y.cpu())
-    return compute_metrics(torch.cat(preds), torch.cat(targets))
+        if "y_mean" in batch:
+            y_means.append(batch["y_mean"].cpu())
+            y_stds.append(batch["y_std"].cpu())
+    pred_cat = torch.cat(preds)
+    tgt_cat = torch.cat(targets)
+    if y_means:
+        return compute_metrics(
+            pred_cat, tgt_cat, torch.cat(y_means), torch.cat(y_stds)
+        )
+    return compute_metrics(pred_cat, tgt_cat)
 
 
 def run_training(cfg: DictConfig) -> dict[str, float]:
@@ -115,34 +408,55 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             "Empty train/val/test split after capping; check tickers, dates, and max_*_windows"
         )
 
-    train_loader = DataLoader(
-        train_ds,
+    pin_memory = device.type == "cuda"
+    loader_kw = dict(
         batch_size=int(cfg.train.batch_size),
-        shuffle=True,
         num_workers=int(cfg.train.num_workers),
-        collate_fn=forecast_collate,
+        pin_memory=pin_memory,
     )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=int(cfg.train.batch_size),
-        shuffle=False,
-        num_workers=int(cfg.train.num_workers),
-        collate_fn=forecast_collate,
-    )
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=int(cfg.train.batch_size),
-        shuffle=False,
-        num_workers=int(cfg.train.num_workers),
-        collate_fn=forecast_collate,
+    train_loader = make_forecast_loader(train_ds, shuffle=True, **loader_kw)
+    val_loader = make_forecast_loader(val_ds, shuffle=False, **loader_kw)
+    test_loader = make_forecast_loader(test_ds, shuffle=False, **loader_kw)
+    log.info(
+        "DataLoader num_workers=%d pin_memory=%s persistent_workers=%s",
+        train_loader.num_workers,
+        train_loader.pin_memory,
+        bool(getattr(train_loader, "persistent_workers", False)),
     )
 
     model = build_model(cfg).to(device)
     param_device = next(model.parameters()).device
-    log.info("Model parameters on %s", param_device)
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    log.info("Model parameters on %s n_params=%d", param_device, n_params)
+    n_backbone_g12: int | None = None
+    if hasattr(model, "backbone") and hasattr(model, "g12"):
+        n_bb = sum(p.numel() for p in model.backbone.parameters())
+        n_g = sum(p.numel() for p in model.g12.parameters())
+        n_backbone_g12 = n_bb + n_g
+        log.info("n_params_backbone_g12=%d (backbone=%d g12=%d)", n_backbone_g12, n_bb, n_g)
     if device.type == "cuda" and param_device.type != "cuda":
         raise RuntimeError(f"Model parameters on {param_device}, expected {device}")
     log_cuda_memory("after model.to")
+
+    proto_cfg = cfg.train.get("proto", {})
+    init_bank: torch.Tensor | None = None
+    if hasattr(model, "proto") and str(proto_cfg.get("init", "random")) == "kmeans":
+        bank_loader = make_forecast_loader(train_ds, shuffle=True, **loader_kw)
+        init_bank, _meta = collect_segment_bank(
+            model,
+            bank_loader,
+            max_segments=int(cfg.explain.get("max_bank_segments", 5000)),
+            max_batches=int(proto_cfg.get("init_batches", 16)),
+        )
+        model.proto.init_from_bank(init_bank.to(device))
+        nn_mean = float(model.proto.nn_dist_mean(init_bank.to(device)))
+        log.info(
+            "proto kmeans++ init bank=%s nn_dist_mean=%.4f min_pairwise=%.4f",
+            tuple(init_bank.shape),
+            nn_mean,
+            float(model.proto.pairwise_min_dist()),
+        )
+
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(cfg.train.lr),
@@ -154,9 +468,14 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
 
     best_val = float("inf")
     patience_left = int(cfg.train.patience)
-    lambda_c = float(cfg.model.loss.lambda_c)
-    lambda_e = float(cfg.model.loss.lambda_e)
-    lambda_d = float(cfg.model.loss.lambda_d)
+    loss_cfg = cfg.model.get("loss", {})
+    lambda_c = float(loss_cfg.get("lambda_c", 0.0))
+    lambda_e = float(loss_cfg.get("lambda_e", 0.0))
+    lambda_d = float(loss_cfg.get("lambda_d", 0.0))
+    loss_kind = str(loss_cfg.get("kind", "mse"))
+    huber_delta = float(loss_cfg.get("delta", 1.0))
+    gamma_dir = float(loss_cfg.get("gamma_dir", 0.1))
+    alpha_corr = float(loss_cfg.get("alpha_corr", 0.3))
 
     mlflow_enabled = bool(cfg.train.mlflow.enabled)
     if mlflow_enabled:
@@ -167,63 +486,184 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         if mlflow_enabled:
             log_cfg_params(cfg)
             mlflow.log_param("device", str(device))
+            mlflow.log_param("n_params", n_params)
+            if n_backbone_g12 is not None:
+                mlflow.log_param("n_params_backbone_g12", n_backbone_g12)
+            fusion_cfg = cfg.model.get("fusion")
+            if fusion_cfg is not None:
+                for key, value in loggable_fusion(fusion_cfg).items():
+                    mlflow.log_param(f"fusion.{key}", value)
             if coverage:
                 mlflow.log_metrics({k: float(v) for k, v in coverage.items()})
 
         for epoch in range(1, int(cfg.train.epochs) + 1):
             model.train()
             epoch_loss = 0.0
+            sum_l_pred = 0.0
+            sum_l_c = 0.0
+            sum_l_e = 0.0
+            sum_l_d = 0.0
             n_batches = 0
             for batch in train_loader:
-                x = batch["x"].to(device)
-                y = batch["y"].to(device)
-                text = batch["text"].to(device)
+                x, y, text, text_seq, ts = _forecast_inputs(batch, device)
                 if n_batches == 0:
                     log.info(
                         "First batch text L2 mean=%.4f (0 means empty/zero embeddings)",
                         float(text.norm(dim=-1).mean()),
                     )
                     log.info(
-                        "First batch shapes x=%s text=%s text_seq=%s",
+                        "First batch shapes x=%s text=%s text_seq=%s ts=%s",
                         tuple(x.shape),
                         tuple(text.shape),
-                        tuple(batch["text_seq"].shape),
+                        tuple(text_seq.shape),
+                        None if ts is None else tuple(ts.shape),
                     )
                     log.info("First batch tensors on x=%s text=%s", x.device, text.device)
+                    if str(cfg.model.name) in {"c1_dual", "c1_hierarchical"}:
+                        expected_c = len([str(column) for column in cfg.data.features])
+                        lookback = int(cfg.data.lookback_T)
+                        n_ts = int(cfg.model.get("n_ts_features", 0))
+                        ts_ok = n_ts == 0 or (
+                            ts is not None and ts.size(1) == lookback and ts.size(-1) == n_ts
+                        )
+                        if (
+                            expected_c not in (1, 2, 5)
+                            or x.size(-1) != expected_c
+                            or text.size(-1) != 15
+                            or text_seq.size(-1) != 15
+                            or x.size(1) != lookback
+                            or not ts_ok
+                        ):
+                            raise RuntimeError(
+                                f"{cfg.model.name} batch "
+                                f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)} "
+                                f"ts={None if ts is None else tuple(ts.shape)}; "
+                                f"expected [B, {lookback}, {expected_c}], text 15"
+                                + (f", ts [B, {lookback}, {n_ts}]" if n_ts else "")
+                            )
+                    if str(cfg.model.name) in {"c1_factored", "c1_inverted", "c1_late_fusion"}:
+                        lookback = int(cfg.data.lookback_T)
+                        n_ts = int(cfg.model.get("n_ts_features", 25))
+                        ts_ok = (
+                            ts is not None and ts.size(1) == lookback and ts.size(-1) == n_ts
+                        )
+                        if (
+                            x.size(-1) != 5
+                            or x.size(1) != lookback
+                            or text.size(-1) != 15
+                            or text_seq.size(-1) != 15
+                            or not ts_ok
+                        ):
+                            raise RuntimeError(
+                                f"{cfg.model.name} batch "
+                                f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)} "
+                                f"ts={None if ts is None else tuple(ts.shape)}; "
+                                f"expected x [B, {lookback}, 5], text 15, ts [B, {lookback}, {n_ts}]"
+                            )
+                    if str(cfg.model.name) == "c1_compact" and (
+                        x.size(-1) != 5
+                        or text.size(-1) != 15
+                        or text_seq.size(-1) != 15
+                        or x.size(1) != int(cfg.data.lookback_T)
+                    ):
+                        raise RuntimeError(
+                            "c1_compact batch "
+                            f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)}; "
+                            f"expected [B, {int(cfg.data.lookback_T)}, 5] and text 15"
+                        )
+                    if str(cfg.model.name) == "timexer_selected" and (
+                        x.size(-1) != 26
+                        or text.size(-1) != 15
+                        or text_seq.size(-1) != 15
+                        or x.size(1) != int(cfg.data.lookback_T)
+                    ):
+                        raise RuntimeError(
+                            "timexer_selected batch "
+                            f"x={tuple(x.shape)} text_seq={tuple(text_seq.shape)}; "
+                            f"expected [B, {int(cfg.data.lookback_T)}, 26] and text 15"
+                        )
                     log_cuda_memory("first train batch")
                 optimizer.zero_grad(set_to_none=True)
-                out = model(x, text)
+                out = _forecast_forward(model, x, text, text_seq, ts)
                 if not hasattr(model, "compute_loss"):
                     raise NotImplementedError(f"{type(model).__name__} has no compute_loss")
                 loss, train_metrics = model.compute_loss(
-                    out, y, lambda_c, lambda_e, lambda_d
+                    out,
+                    y,
+                    lambda_c=lambda_c,
+                    lambda_e=lambda_e,
+                    lambda_d=lambda_d,
+                    loss_kind=loss_kind,
+                    huber_delta=huber_delta,
+                    gamma_dir=gamma_dir,
+                    alpha_corr=alpha_corr,
                 )
                 loss.backward()
                 if cfg.train.grad_clip:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg.train.grad_clip))
                 optimizer.step()
                 epoch_loss += train_metrics["loss"]
+                sum_l_pred += train_metrics["l_pred"]
+                sum_l_c += train_metrics["l_c"]
+                sum_l_e += train_metrics["l_e"]
+                sum_l_d += train_metrics["l_d"]
                 n_batches += 1
 
             if epoch % int(cfg.train.eval_every) == 0:
                 val_metrics = evaluate(model, val_loader, device)
                 avg_loss = epoch_loss / max(n_batches, 1)
+                avg_lp = sum_l_pred / max(n_batches, 1)
+                avg_lc = sum_l_c / max(n_batches, 1)
+                avg_le = sum_l_e / max(n_batches, 1)
+                avg_ld = sum_l_d / max(n_batches, 1)
+                proto_nn = float("nan")
+                proto_pair = float("nan")
+                if hasattr(model, "proto"):
+                    proto_pair = float(model.proto.pairwise_min_dist())
+                    if init_bank is not None:
+                        proto_nn = float(model.proto.nn_dist_mean(init_bank.to(device)))
                 log.info(
-                    "Epoch %d — train_loss=%.4f val_mse=%.4f val_mae=%.4f",
+                    "Epoch %d — train_loss=%.4f l_pred=%.4f l_c=%.4f l_e=%.4f l_d=%.4f "
+                    "val_mse=%.4f val_mae=%.4f proto_nn_dist_mean=%s proto_min_pairwise_dist=%s",
                     epoch,
                     avg_loss,
+                    avg_lp,
+                    avg_lc,
+                    avg_le,
+                    avg_ld,
                     val_metrics["mse"],
                     val_metrics["mae"],
+                    f"{proto_nn:.4f}" if proto_nn == proto_nn else "n/a",
+                    f"{proto_pair:.4f}" if proto_pair == proto_pair else "n/a",
                 )
                 if mlflow_enabled:
-                    mlflow.log_metrics(
-                        {
-                            "train_loss": avg_loss,
-                            "val_mse": val_metrics["mse"],
-                            "val_mae": val_metrics["mae"],
-                        },
-                        step=epoch,
-                    )
+                    row = {
+                        "train_loss": avg_loss,
+                        "train_l_pred": avg_lp,
+                        "train_l_c": avg_lc,
+                        "train_l_e": avg_le,
+                        "train_l_d": avg_ld,
+                        "val_mse": val_metrics["mse"],
+                        "val_mae": val_metrics["mae"],
+                    }
+                    if "mae_denorm" in val_metrics:
+                        row["val_mae_denorm"] = val_metrics["mae_denorm"]
+                    if proto_nn == proto_nn:
+                        row["proto_nn_dist_mean"] = proto_nn
+                    if proto_pair == proto_pair:
+                        row["proto_min_pairwise_dist"] = proto_pair
+                    mlflow.log_metrics(row, step=epoch)
+                project_every = int(proto_cfg.get("project_every", 0) or 0)
+                if (
+                    project_every > 0
+                    and hasattr(model, "proto")
+                    and init_bank is not None
+                    and epoch % project_every == 0
+                ):
+                    idx, _d = model.proto.project(init_bank.to(device))
+                    with torch.no_grad():
+                        model.proto.prototypes.copy_(init_bank.to(device)[idx])
+                    log.info("Projected prototypes onto bank at epoch %d", epoch)
                 if val_metrics["mse"] < best_val:
                     best_val = val_metrics["mse"]
                     patience_left = int(cfg.train.patience)
@@ -239,13 +679,14 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True))
 
         test_metrics = evaluate(model, test_loader, device)
-        log.info("Test — mse=%.4f mae=%.4f", test_metrics["mse"], test_metrics["mae"])
+        log.info("Test — mse=%.4f mae=%.4f mae_denorm=%s", test_metrics["mse"], test_metrics["mae"], f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a")
         log.info(
-            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f",
+            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f mae_denorm=%s",
             cfg.model.name,
             cfg.data.horizon,
             test_metrics["mse"],
             test_metrics["mae"],
+            f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
         )
         log.info(
             "H1_ROW model=%s horizon=%s mse=%.4f mae=%.4f",
@@ -260,17 +701,21 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 {
                     "model": str(cfg.model.name),
                     "horizon": int(cfg.data.horizon),
+                    "seed": int(cfg.train.seed),
+                    "normalize": str(cfg.data.get("normalize")),
                     "mse": test_metrics["mse"],
                     "mae": test_metrics["mae"],
+                    "mae_denorm": test_metrics.get("mae_denorm"),
                 },
                 indent=2,
             ),
             encoding="utf-8",
         )
         if mlflow_enabled:
-            mlflow.log_metrics(
-                {"test_mse": test_metrics["mse"], "test_mae": test_metrics["mae"]}
-            )
+            test_log = {"test_mse": test_metrics["mse"], "test_mae": test_metrics["mae"]}
+            if "mae_denorm" in test_metrics:
+                test_log["test_mae_denorm"] = test_metrics["mae_denorm"]
+            mlflow.log_metrics(test_log)
             mlflow.log_artifact(str(metrics_path))
 
         h3_paths = write_h3_artifacts(

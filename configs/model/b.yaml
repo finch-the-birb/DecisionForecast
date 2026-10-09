@@ -1,7 +1,15 @@
 # Model B — TimeXer + prototypes + late fusion (Phase 2 / H1).
+# OHLCV (close, volume, open, high, low) are multivariate PatchEmbed channels
+# for B/C0/C1 — not exogenous tokens. The exo slot is reserved for text in C1.
 name: b
 variant: timexer_late
-fusion: late
+
+# One text entry: pooled ``text`` at the head. Encoder exo=None; text_seq unused.
+fusion:
+  kind: late
+  text_at_head: true
+  text_to_patches: false
+  text_as_exogenous: false
 
 d_model: 64
 n_prototypes: 10
@@ -17,9 +25,16 @@ text_mlp:
   hidden: 64
 
 head:
+  pool: mean         # mean (default) | last | global | flatten
+  type: linear       # linear | mlp
   hidden: 128
+  dropout: 0.1
 
 loss:
+  kind: mse           # mse | huber | directional | correlation | huber_directional
+  delta: 1.0          # for huber
+  gamma_dir: 0.1      # directional penalty weight
+  alpha_corr: 0.3     # correlation penalty weight
   lambda_c: 0.1
   lambda_e: 0.1
   lambda_d: 0.01

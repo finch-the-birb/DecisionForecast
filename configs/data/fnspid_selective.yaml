@@ -1,0 +1,10 @@
+# 5 OHLCV channels and the frozen 15D compact text, with selective scaling.
+# Prices use per-window RevIN. Oscillators and calendar cycles are not
+# re-standardized. Other columns use the train-period median and IQR.
+defaults:
+  - fnspid_compact
+  - _self_
+
+name: fnspid_selective
+normalize: selective
+patch_stride: 6

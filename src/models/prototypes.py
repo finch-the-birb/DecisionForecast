@@ -47,9 +47,41 @@ class PrototypeModule(nn.Module):
         return proto_mix, losses
 
     def project(self, bank: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Nearest train segment embedding for each prototype (H3 projection)."""
+        """Nearest train segment embedding for each prototype (H3 projection).
+
+        Returns indices and **squared** Euclidean distances.
+        """
         z = bank
         p = self.prototypes.detach()
         dist = torch.cdist(p, z, p=2).pow(2)
         idx = dist.argmin(dim=1)
         return idx, dist.gather(1, idx.unsqueeze(1)).squeeze(1)
+
+    def pairwise_min_dist(self) -> torch.Tensor:
+        p = self.prototypes.detach()
+        if p.size(0) < 2:
+            return p.new_zeros(())
+        d = torch.cdist(p, p, p=2)
+        mask = torch.triu(torch.ones_like(d, dtype=torch.bool), diagonal=1)
+        return d[mask].min()
+
+    def nn_dist_mean(self, bank: torch.Tensor) -> torch.Tensor:
+        _idx, dist_sq = self.project(bank)
+        return dist_sq.sqrt().mean()
+
+    def init_from_bank(self, bank: torch.Tensor, random_state: int = 0) -> None:
+        """k-means++ seeding from a pre-injection segment bank (actual data points)."""
+        from sklearn.cluster import kmeans_plusplus
+
+        z = bank.detach().reshape(-1, bank.size(-1))
+        n = int(self.prototypes.size(0))
+        if z.size(0) < n:
+            raise ValueError(f"bank has {z.size(0)} rows; need >= n_prototypes={n}")
+        x = z.cpu().numpy()
+        centers, _idx = kmeans_plusplus(x, n_clusters=n, random_state=random_state)
+        with torch.no_grad():
+            self.prototypes.copy_(
+                torch.from_numpy(centers).to(
+                    device=self.prototypes.device, dtype=self.prototypes.dtype
+                )
+            )

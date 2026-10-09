@@ -1,0 +1,12 @@
+# Endogenous price channels plus 25 TreeSHAP indicators for G_ts.
+# features may be [close], [close, volume], or [close, volume, open, high, low].
+# The indicator names are the paper fold-1 signature, excluding close.
+defaults:
+  - fnspid_selective
+  - _self_
+
+name: fnspid_dual_ts
+features_mode: dual_ts
+features: [close, volume, open, high, low]
+signature_path: ${data.root}/cache/selected_signatures/paper_fold1_signature.json
+technical_cache_dir: ${data.root}/cache/technical

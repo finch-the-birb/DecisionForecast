@@ -6,7 +6,11 @@ import torch
 import torch.nn as nn
 
 from src.models.ablate import apply_feature_ablation
+from src.models.fusion import assert_fusion
+from src.models.head import ForecastHead
+from src.models.outputs import compute_pred_loss
 from src.models.prototypes import PrototypeLosses, PrototypeModule
+from src.models.timexer_backbone import n_patches
 
 
 @dataclass
@@ -57,6 +61,7 @@ class TimeXLModelA(nn.Module):
     def __init__(
         self,
         n_features: int,
+        seq_len: int,
         horizon: int,
         d_model: int,
         n_prototypes: int,
@@ -68,8 +73,19 @@ class TimeXLModelA(nn.Module):
         text_dim: int,
         text_hidden: int,
         head_hidden: int,
+        fusion,
+        head_type: str = "linear",
+        head_dropout: float = 0.0,
+        head_pool: str = "mean",
     ) -> None:
         super().__init__()
+        self.fusion = assert_fusion(
+            fusion,
+            kind="late",
+            text_at_head=True,
+            text_to_patches=False,
+            text_as_exogenous=False,
+        )
         self.horizon = horizon
         self.encoder = ConvSegmentEncoder(
             in_channels=n_features,
@@ -86,32 +102,39 @@ class TimeXLModelA(nn.Module):
             nn.ReLU(),
             nn.Linear(text_hidden, d_model),
         )
-        self.head = nn.Sequential(
-            nn.Linear(d_model * 2, head_hidden),
-            nn.ReLU(),
-            nn.Linear(head_hidden, horizon),
+        n_p = n_patches(seq_len, patch_len, patch_stride)
+        self.head = ForecastHead(
+            d_model=d_model,
+            horizon=horizon,
+            pool=head_pool,
+            n_patches=n_p,
+            head_type=head_type,
+            head_hidden=head_hidden,
+            dropout=head_dropout,
+            extra_dim=d_model,
         )
 
     def forward(
         self,
         x: torch.Tensor,
         text: torch.Tensor,
+        text_seq: torch.Tensor | None = None,
         proto_mode: str = "none",
         text_mode: str = "none",
         ablation_generator: torch.Generator | None = None,
     ) -> ModelAOutput:
-        segments = self.encoder(x)
-        proto_mix, proto_losses = self.proto(segments)
+        del text_seq
+        bank = self.encoder(x)
+        proto_mix, proto_losses = self.proto(bank)
+        segments = bank
         if proto_mode != "zero":
             proto_mix = apply_feature_ablation(proto_mix, proto_mode, ablation_generator)
-            segments = segments + self.inject(proto_mix)
-        ts_repr = segments.mean(dim=1)
+            segments = bank + self.inject(proto_mix)
         text_repr = apply_feature_ablation(
             self.text_mlp(text), text_mode, ablation_generator
         )
-        fused = torch.cat([ts_repr, text_repr], dim=-1)
-        pred = self.head(fused)
-        return ModelAOutput(pred=pred, proto_losses=proto_losses, segments=segments)
+        pred = self.head(segments, extra=text_repr)
+        return ModelAOutput(pred=pred, proto_losses=proto_losses, segments=bank)
 
     def compute_loss(
         self,
@@ -120,20 +143,6 @@ class TimeXLModelA(nn.Module):
         lambda_c: float,
         lambda_e: float,
         lambda_d: float,
+        **kwargs,
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        l_pred = nn.functional.mse_loss(output.pred, target)
-        pl = output.proto_losses
-        total = (
-            l_pred
-            + lambda_c * pl.l_c
-            + lambda_e * pl.l_e
-            + lambda_d * pl.l_d
-        )
-        metrics = {
-            "loss": float(total.detach()),
-            "l_pred": float(l_pred.detach()),
-            "l_c": float(pl.l_c.detach()),
-            "l_e": float(pl.l_e.detach()),
-            "l_d": float(pl.l_d.detach()),
-        }
-        return total, metrics
+        return compute_pred_loss(output, target, lambda_c, lambda_e, lambda_d, **kwargs)

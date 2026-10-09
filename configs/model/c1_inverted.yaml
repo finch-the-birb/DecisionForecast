@@ -1,0 +1,41 @@
+# Inverted variate tokens. Patches are 5 OHLCV plus 6 close-price rFFT bins.
+# Each of 25 exogenous series over the lookback is one token, Linear(T, d_model).
+# Patches cross-attend to those tokens. G_text reads 15D compact text.
+name: c1_inverted
+variant: timexer_inverted
+
+fusion:
+  kind: c1_inverted
+  text_at_head: false
+  text_to_patches: false
+  text_as_exogenous: true
+  global_to_patch: true
+
+d_model: 64
+# null means 4 * d_model inside build_model.
+d_ff: null
+n_heads: 4
+e_layers: 1
+dropout: 0.1
+text_dim: 15
+n_features: 5
+n_ts_features: 25
+
+use_prototypes: false
+n_prototypes: 10
+d_min: 0.5
+
+head:
+  pool: last
+  type: linear
+  hidden: 128
+  dropout: 0.0
+
+loss:
+  kind: huber
+  delta: 0.5
+  lambda_c: 0.1
+  lambda_e: 0.1
+  lambda_d: 0.01
+  gamma_dir: 0.0
+  alpha_corr: 0.0
