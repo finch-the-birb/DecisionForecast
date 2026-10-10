@@ -521,6 +521,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
     huber_delta = float(loss_cfg.get("delta", 1.0))
     gamma_dir = float(loss_cfg.get("gamma_dir", 0.1))
     alpha_corr = float(loss_cfg.get("alpha_corr", 0.3))
+    beta_scale = float(loss_cfg.get("beta_scale", 0.0))
     target_mode = str(
         cfg.model.get("target_mode")
         if "model" in cfg and cfg.model.get("target_mode") is not None
@@ -538,6 +539,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             mlflow.log_param("device", str(device))
             mlflow.log_param("n_params", n_params)
             mlflow.log_param("target_mode", target_mode)
+            mlflow.log_param("beta_scale", beta_scale)
             if n_backbone_g12 is not None:
                 mlflow.log_param("n_params_backbone_g12", n_backbone_g12)
             fusion_cfg = cfg.model.get("fusion")
@@ -554,6 +556,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             sum_l_c = 0.0
             sum_l_e = 0.0
             sum_l_d = 0.0
+            sum_l_scale = 0.0
             n_batches = 0
             for batch in train_loader:
                 x, y, text, text_seq, ts = _forecast_inputs(batch, device)
@@ -654,6 +657,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     huber_delta=huber_delta,
                     gamma_dir=gamma_dir,
                     alpha_corr=alpha_corr,
+                    beta_scale=beta_scale,
                 )
                 loss.backward()
                 if cfg.train.grad_clip:
@@ -664,6 +668,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 sum_l_c += train_metrics["l_c"]
                 sum_l_e += train_metrics["l_e"]
                 sum_l_d += train_metrics["l_d"]
+                sum_l_scale += train_metrics.get("l_scale", 0.0)
                 n_batches += 1
 
             if epoch % int(cfg.train.eval_every) == 0:
@@ -673,6 +678,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 avg_lc = sum_l_c / max(n_batches, 1)
                 avg_le = sum_l_e / max(n_batches, 1)
                 avg_ld = sum_l_d / max(n_batches, 1)
+                avg_lscale = sum_l_scale / max(n_batches, 1)
                 proto_nn = float("nan")
                 proto_pair = float("nan")
                 if hasattr(model, "proto"):
@@ -681,11 +687,12 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         proto_nn = float(model.proto.nn_dist_mean(init_bank.to(device)))
                 da_val_str = f" val_da={val_metrics['da']:.4f}" if "da" in val_metrics else ""
                 log.info(
-                    "Epoch %d — train_loss=%.4f l_pred=%.4f l_c=%.4f l_e=%.4f l_d=%.4f "
+                    "Epoch %d — train_loss=%.4f l_pred=%.4f l_scale=%.4f l_c=%.4f l_e=%.4f l_d=%.4f "
                     "val_mse=%.4f val_mae=%.4f%s proto_nn_dist_mean=%s proto_min_pairwise_dist=%s",
                     epoch,
                     avg_loss,
                     avg_lp,
+                    avg_lscale,
                     avg_lc,
                     avg_le,
                     avg_ld,
@@ -699,6 +706,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     row = {
                         "train_loss": avg_loss,
                         "train_l_pred": avg_lp,
+                        "train_l_scale": avg_lscale,
                         "train_l_c": avg_lc,
                         "train_l_e": avg_le,
                         "train_l_d": avg_ld,

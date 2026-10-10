@@ -43,6 +43,11 @@ def correlation_penalty(pred: torch.Tensor, target: torch.Tensor, eps: float = 1
     return 1.0 - r.mean()
 
 
+def scale_penalty(pred: torch.Tensor) -> torch.Tensor:
+    """L2 shrinkage penalty on forecast amplitude (mean square of predicted deltas)."""
+    return pred.pow(2).mean()
+
+
 def compute_task_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
@@ -50,6 +55,7 @@ def compute_task_loss(
     huber_delta: float = 0.5,
     gamma_dir: float = 0.0,
     alpha_corr: float = 0.0,
+    beta_scale: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     base = _regression_loss(pred, target, loss_kind, float(huber_delta))
     l_task = base
@@ -64,9 +70,15 @@ def compute_task_loss(
     if float(alpha_corr) > 0.0:
         l_task = l_task + float(alpha_corr) * l_corr
 
+    # Штраф за избыточную амплитуду размаха приращений (Scale Shrinkage)
+    l_scale = scale_penalty(pred) if float(beta_scale) > 0.0 else pred.new_zeros(())
+    if float(beta_scale) > 0.0:
+        l_task = l_task + float(beta_scale) * l_scale
+
     metrics = {
         "l_pred": float(base.detach()),
         "l_dir": float(l_dir.detach()),
         "l_corr": float(l_corr.detach()),
+        "l_scale": float(l_scale.detach()),
     }
     return l_task, metrics

@@ -27,6 +27,7 @@ def compute_pred_loss(
     huber_delta: float = 0.5,
     gamma_dir: float = 0.0,
     alpha_corr: float = 0.0,
+    beta_scale: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     l_task, task_metrics = compute_task_loss(
         output.pred,
@@ -35,6 +36,7 @@ def compute_pred_loss(
         huber_delta=huber_delta,
         gamma_dir=gamma_dir,
         alpha_corr=alpha_corr,
+        beta_scale=beta_scale,
     )
     if output.proto_losses is None:
         zeros = l_task.new_zeros(())
