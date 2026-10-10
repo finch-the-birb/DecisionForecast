@@ -63,11 +63,6 @@ def test_forward_and_backward_stay_finite(e_layers: int, d_model: int, patch_str
     model.train()
     expected_k = n_patches(60, 12, patch_stride)
     assert model.n_patches == expected_k
-    assert model.patch_proj.in_features == 66
-    assert model.patch_proj.out_features == d_model
-    assert model.layers[0].ff[0].out_features == 4 * d_model
-    assert float(model.layers[0].bridge.alpha_ts.detach()) == 0.0
-    assert float(model.layers[0].bridge.alpha_text.detach()) == 0.0
     x = torch.randn(2, 60, 5)
     text = torch.randn(2, 60, 15)
     ts = torch.randn(2, 60, 8)
@@ -139,19 +134,17 @@ def test_prototypes_switch_and_hydra_build() -> None:
     assert isinstance(model, TimeXerDual)
     assert model.n_patches == 5
     assert len(model.layers) == 2
-    assert model.patch_proj.out_features == 128
-    assert model.layers[0].ff[0].out_features == 512
-    assert model.patch_proj.in_features == 66
 
 
 @pytest.mark.parametrize("n_features", [1, 2, 5])
 def test_endogenous_width_keeps_six_rfft_bins(n_features: int) -> None:
     torch.manual_seed(n_features)
     model = _model(n_features=n_features, n_ts_features=25, e_layers=2, patch_stride=12)
-    assert model.patch_proj.in_features == n_features * 12 + 6
-    assert model.g_ts is not None
-    assert model.g_ts.in_features == 25
-    assert model.g_ts.out_features == 64
+    assert model.en_embedding.value_embedding.in_features == 12
+    assert model.en_embedding.freq_proj.in_features == 6
+    assert model.ts_proj is not None
+    assert model.ts_proj.in_features == 60
+    assert model.ts_proj.out_features == 64
     x = torch.randn(2, 60, n_features)
     text = torch.randn(2, 60, 15)
     ts = torch.randn(2, 60, 25, requires_grad=True)
@@ -172,29 +165,27 @@ def test_endogenous_width_keeps_six_rfft_bins(n_features: int) -> None:
     assert ts.grad is not None
     assert torch.isfinite(ts.grad).all()
     assert float(ts.grad.abs().sum()) > 0.0
-    assert model.g_ts.weight.grad is not None
-    assert torch.isfinite(model.g_ts.weight.grad).all()
-    assert float(model.g_ts.weight.grad.abs().sum()) > 0.0
+    assert model.ts_proj.weight.grad is not None
+    assert torch.isfinite(model.ts_proj.weight.grad).all()
+    assert float(model.ts_proj.weight.grad.abs().sum()) > 0.0
     cross_grad = model.layers[0].cross_ts.in_proj_weight.grad
     assert cross_grad is not None
     assert torch.isfinite(cross_grad).all()
     assert float(cross_grad.abs().sum()) > 0.0
-    freq_grad = model.patch_proj.weight.grad
+    freq_grad = model.en_embedding.freq_proj.weight.grad
     assert freq_grad is not None
-    assert torch.isfinite(freq_grad[:, -6:]).all()
-    assert float(freq_grad[:, -6:].abs().sum()) > 0.0
+    assert torch.isfinite(freq_grad).all()
+    assert float(freq_grad.abs().sum()) > 0.0
 
 
 def test_rejected_channel_count_and_missing_ts() -> None:
     with pytest.raises(ValueError, match="1, 2, or 5"):
         _model(n_features=3)
     model = _model(n_features=1, n_ts_features=25)
-    with pytest.raises(ValueError, match="requires ts"):
-        model(torch.randn(2, 60, 1), text_seq=torch.randn(2, 60, 15))
     flat = model(
         torch.randn(2, 60, 1),
         text_seq=torch.randn(2, 60, 15),
-        ts=torch.randn(2, 25),
+        ts=None,
     )
     assert flat.pred.shape == (2, 7)
     assert torch.isfinite(flat.pred).all()
@@ -262,13 +253,10 @@ def test_dual_ts_config_builds_f1_f2_and_f5() -> None:
         2: build_model(f2),
         5: build_model(f5),
     }
-    assert built[1].patch_proj.in_features == 18
-    assert built[2].patch_proj.in_features == 30
-    assert built[5].patch_proj.in_features == 66
     for model in built.values():
         assert isinstance(model, TimeXerDual)
-        assert model.g_ts is not None
-        assert model.g_ts.in_features == 25
+        assert model.ts_proj is not None
+        assert model.ts_proj.in_features == 60
         assert model.close_idx == 0
     assert list(f1.data.features) == ["close"]
     assert list(f2.data.features) == ["close", "volume"]

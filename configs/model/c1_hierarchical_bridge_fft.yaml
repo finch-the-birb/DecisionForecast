@@ -1,8 +1,5 @@
-# Canonical Hierarchical TimeXer (NeurIPS 2024 / TSLib).
-# Layer 1: G_ts queries 25 indicators (Micro-structure).
-# Layer 2: G_text queries 15D text (Macro-structure).
-# Layer 3: Cross-modal consolidation via Self-Attention.
-name: c1_hierarchical
+# Canonical Hierarchical TimeXer with Global Window Spectrum into G_ts (fft_mode: bridge).
+name: c1_hierarchical_bridge_fft
 variant: timexer_hierarchical
 
 fusion:
@@ -20,7 +17,7 @@ dropout: 0.1
 text_dim: 15
 n_features: null
 n_ts_features: 25
-fft_mode: patch
+fft_mode: bridge
 
 use_prototypes: false
 n_prototypes: 10

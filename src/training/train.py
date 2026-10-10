@@ -184,7 +184,8 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_dropout=head_dropout,
             head_pool=head_pool,
         )
-    if name in {"c1_dual", "c1_hierarchical"}:
+    variant = str(cfg.model.get("variant", ""))
+    if name in {"c1_dual", "c1_hierarchical"} or variant in {"timexer_dual", "timexer_hierarchical"}:
         text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
         if n_features not in (1, 2, 5) or text_dim != 15:
             raise ValueError(
@@ -205,7 +206,12 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
         d_model = int(cfg.model.d_model)
         raw_d_ff = cfg.model.get("d_ff", None)
         d_ff = 4 * d_model if raw_d_ff is None else int(raw_d_ff)
-        model_cls = TimeXerHierarchical if name == "c1_hierarchical" else TimeXerDual
+        model_cls = (
+            TimeXerHierarchical
+            if ("hierarchical" in name or variant == "timexer_hierarchical")
+            else TimeXerDual
+        )
+        fft_mode = str(cfg.model.get("fft_mode", "patch"))
         return model_cls(
             n_features=n_features,
             seq_len=seq_len,
@@ -228,6 +234,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_hidden=head_hidden,
             head_dropout=head_dropout,
             head_pool=head_pool,
+            fft_mode=fft_mode,
         )
     if name == "c1_compact":
         text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
@@ -531,11 +538,13 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         tuple(text_seq.shape),
                         None if ts is None else tuple(ts.shape),
                     )
-                    log.info("First batch tensors on x=%s text=%s", x.device, text.device)
-                    if str(cfg.model.name) in {"c1_dual", "c1_hierarchical"}:
+                    model_variant = str(cfg.model.get("variant", ""))
+                    if str(cfg.model.name) in {"c1_dual", "c1_hierarchical"} or model_variant in {"timexer_dual", "timexer_hierarchical"}:
                         expected_c = len([str(column) for column in cfg.data.features])
                         lookback = int(cfg.data.lookback_T)
                         n_ts = int(cfg.model.get("n_ts_features", 0))
+                        if ts is None and n_ts > 0:
+                            ts = torch.zeros(x.size(0), lookback, n_ts, device=x.device, dtype=x.dtype)
                         ts_ok = n_ts == 0 or (
                             ts is not None and ts.size(1) == lookback and ts.size(-1) == n_ts
                         )

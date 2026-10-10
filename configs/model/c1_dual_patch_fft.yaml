@@ -1,21 +1,18 @@
-# Canonical Hierarchical TimeXer (NeurIPS 2024 / TSLib).
-# Layer 1: G_ts queries 25 indicators (Micro-structure).
-# Layer 2: G_text queries 15D text (Macro-structure).
-# Layer 3: Cross-modal consolidation via Self-Attention.
-name: c1_hierarchical
-variant: timexer_hierarchical
+# Canonical Dual-token TimeXer with Local Patch FFT (fft_mode: patch).
+name: c1_dual_patch_fft
+variant: timexer_dual
 
 fusion:
-  kind: c1_hierarchical
+  kind: c1_dual
   text_at_head: false
   text_to_patches: false
   text_as_exogenous: true
   global_to_patch: true
 
 d_model: 64
+d_ff: null
 n_heads: 4
-e_layers: 3
-d_ff: 256
+e_layers: 2
 dropout: 0.1
 text_dim: 15
 n_features: null
