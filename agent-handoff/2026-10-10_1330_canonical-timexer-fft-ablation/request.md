@@ -2,7 +2,7 @@
 
 - authored_by: dev
 - created_at: 2026-10-10T13:30:00Z
-- target_ref: feat/phase2-timexer@HEAD
+- target_ref: feat/phase2-timexer@9b22ad2
 - phase: 6
 - priority: high
 
