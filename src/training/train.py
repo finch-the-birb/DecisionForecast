@@ -375,6 +375,7 @@ def evaluate(
     loader: DataLoader,
     device: torch.device,
     close_idx: int = 0,
+    target_mode: str = "level",
 ) -> dict[str, float]:
     model.eval()
     preds: list[torch.Tensor] = []
@@ -382,6 +383,8 @@ def evaluate(
     y_means: list[torch.Tensor] = []
     y_stds: list[torch.Tensor] = []
     last_closes: list[torch.Tensor] = []
+    last_raw_closes: list[torch.Tensor] = []
+    raw_target_prices: list[torch.Tensor] = []
     idx = getattr(model, "close_idx", getattr(model, "target_idx", close_idx))
     for batch in loader:
         x, y, text, text_seq, ts = _forecast_inputs(batch, device)
@@ -392,19 +395,34 @@ def evaluate(
         if "y_mean" in batch:
             y_means.append(batch["y_mean"].cpu())
             y_stds.append(batch["y_std"].cpu())
+        if "last_raw_close" in batch:
+            last_raw_closes.append(batch["last_raw_close"].cpu())
+        if "raw_target_price" in batch:
+            raw_target_prices.append(batch["raw_target_price"].cpu())
         last_closes.append(x[:, -1, idx].cpu())
     pred_cat = torch.cat(preds)
     tgt_cat = torch.cat(targets)
     lc_cat = torch.cat(last_closes) if last_closes else None
-    if y_means:
-        return compute_metrics(
-            pred_cat,
-            tgt_cat,
-            torch.cat(y_means),
-            torch.cat(y_stds),
-            last_close=lc_cat,
-        )
-    return compute_metrics(pred_cat, tgt_cat, last_close=lc_cat)
+    y_mean_cat = torch.cat(y_means) if y_means else None
+    y_std_cat = torch.cat(y_stds) if y_stds else None
+    last_raw_close_cat = torch.cat(last_raw_closes) if last_raw_closes else None
+    raw_target_price_cat = torch.cat(raw_target_prices) if raw_target_prices else None
+
+    if target_mode == "level":
+        ds = getattr(loader, "dataset", None)
+        if ds is not None and getattr(ds, "target_mode", "level") == "delta":
+            target_mode = "delta"
+
+    return compute_metrics(
+        pred=pred_cat,
+        target=tgt_cat,
+        y_mean=y_mean_cat,
+        y_std=y_std_cat,
+        last_close=lc_cat,
+        target_mode=target_mode,
+        last_raw_close=last_raw_close_cat,
+        raw_target_price=raw_target_price_cat,
+    )
 
 
 def run_training(cfg: DictConfig) -> dict[str, float]:
@@ -496,6 +514,11 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
     huber_delta = float(loss_cfg.get("delta", 1.0))
     gamma_dir = float(loss_cfg.get("gamma_dir", 0.1))
     alpha_corr = float(loss_cfg.get("alpha_corr", 0.3))
+    target_mode = str(
+        cfg.model.get("target_mode")
+        if "model" in cfg and cfg.model.get("target_mode") is not None
+        else cfg.data.get("target_mode", "level")
+    )
 
     mlflow_enabled = bool(cfg.train.mlflow.enabled)
     if mlflow_enabled:
@@ -507,6 +530,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             log_cfg_params(cfg)
             mlflow.log_param("device", str(device))
             mlflow.log_param("n_params", n_params)
+            mlflow.log_param("target_mode", target_mode)
             if n_backbone_g12 is not None:
                 mlflow.log_param("n_params_backbone_g12", n_backbone_g12)
             fusion_cfg = cfg.model.get("fusion")
@@ -632,7 +656,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 n_batches += 1
 
             if epoch % int(cfg.train.eval_every) == 0:
-                val_metrics = evaluate(model, val_loader, device)
+                val_metrics = evaluate(model, val_loader, device, target_mode=target_mode)
                 avg_loss = epoch_loss / max(n_batches, 1)
                 avg_lp = sum_l_pred / max(n_batches, 1)
                 avg_lc = sum_l_c / max(n_batches, 1)
@@ -674,6 +698,9 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         row["val_da"] = val_metrics["da"]
                     if "mae_denorm" in val_metrics:
                         row["val_mae_denorm"] = val_metrics["mae_denorm"]
+                    for k in ("delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm"):
+                        if k in val_metrics:
+                            row[f"val_{k}"] = val_metrics[k]
                     if proto_nn == proto_nn:
                         row["proto_nn_dist_mean"] = proto_nn
                     if proto_pair == proto_pair:
@@ -704,23 +731,28 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         if best_path.exists():
             model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True))
 
-        test_metrics = evaluate(model, test_loader, device)
+        test_metrics = evaluate(model, test_loader, device, target_mode=target_mode)
         da_test_str = f" da={test_metrics['da']:.4f}" if "da" in test_metrics else ""
+        delta_str = ""
+        if "delta_mse" in test_metrics:
+            delta_str = f" delta_mse={test_metrics['delta_mse']:.6f} delta_da={test_metrics['delta_da']:.4f} mse_price={test_metrics.get('test_mse_price', 0.0):.4f}"
         log.info(
-            "Test — mse=%.4f mae=%.4f%s mae_denorm=%s",
+            "Test — mse=%.4f mae=%.4f%s mae_denorm=%s%s",
             test_metrics["mse"],
             test_metrics["mae"],
             da_test_str,
             f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
+            delta_str,
         )
         log.info(
-            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f%s mae_denorm=%s",
+            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f%s mae_denorm=%s%s",
             cfg.model.name,
             cfg.data.horizon,
             test_metrics["mse"],
             test_metrics["mae"],
             da_test_str,
             f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
+            delta_str,
         )
         log.info(
             "H1_ROW model=%s horizon=%s mse=%.4f mae=%.4f%s",
@@ -736,12 +768,16 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             "horizon": int(cfg.data.horizon),
             "seed": int(cfg.train.seed),
             "normalize": str(cfg.data.get("normalize")),
+            "target_mode": target_mode,
             "mse": test_metrics["mse"],
             "mae": test_metrics["mae"],
             "mae_denorm": test_metrics.get("mae_denorm"),
         }
         if "da" in test_metrics:
             metrics_dict["da"] = test_metrics["da"]
+        for k in ("delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm"):
+            if k in test_metrics:
+                metrics_dict[k] = test_metrics[k]
         metrics_path.write_text(
             json.dumps(metrics_dict, indent=2),
             encoding="utf-8",
@@ -752,6 +788,9 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 test_log["test_da"] = test_metrics["da"]
             if "mae_denorm" in test_metrics:
                 test_log["test_mae_denorm"] = test_metrics["mae_denorm"]
+            for k in ("delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm"):
+                if k in test_metrics:
+                    test_log[k] = test_metrics[k]
             mlflow.log_metrics(test_log)
             mlflow.log_artifact(str(metrics_path))
 

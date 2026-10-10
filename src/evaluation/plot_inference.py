@@ -109,7 +109,12 @@ def collect_ticker_predictions(
         with torch.no_grad():
             out = _forecast_forward(model, x, text, text_seq, ts_exo)
         pred_norm = out.pred.squeeze(0).cpu().numpy()  # [H]
-        pred_dollars = pred_norm * y_std + y_mean
+        is_delta = getattr(test_ds, "target_mode", "level") == "delta"
+        if is_delta:
+            last_close_val = float(item["last_raw_close"].item()) if "last_raw_close" in item else float(prices[wi.end_idx - 1])
+            pred_dollars = last_close_val * (1.0 + pred_norm)
+        else:
+            pred_dollars = pred_norm * y_std + y_mean
 
         last_close_date = dates.iloc[wi.end_idx - 1]
         last_close_price = prices[wi.end_idx - 1]

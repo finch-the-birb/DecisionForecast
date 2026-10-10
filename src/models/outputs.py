@@ -13,8 +13,8 @@ from src.models.prototypes import PrototypeLosses
 @dataclass
 class ModelOutput:
     pred: torch.Tensor
-    proto_losses: PrototypeLosses | None
-    segments: torch.Tensor  # pre-injection embeddings (proto similarity space)
+    proto_losses: PrototypeLosses | None = None
+    segments: torch.Tensor | None = None  # pre-injection embeddings (proto similarity space)
 
 
 def compute_pred_loss(
@@ -23,10 +23,10 @@ def compute_pred_loss(
     lambda_c: float,
     lambda_e: float,
     lambda_d: float,
-    loss_kind: str = "mse",
-    huber_delta: float = 1.0,
-    gamma_dir: float = 0.1,
-    alpha_corr: float = 0.3,
+    loss_kind: str = "huber",
+    huber_delta: float = 0.5,
+    gamma_dir: float = 0.0,
+    alpha_corr: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     l_task, task_metrics = compute_task_loss(
         output.pred,

@@ -10,6 +10,7 @@ def forecast_collate(batch: list[dict]) -> dict[str, torch.Tensor | list]:
     collated: dict[str, torch.Tensor | list] = {
         "x": torch.stack([item["x"] for item in batch], dim=0),
         "y": torch.stack([item["y"] for item in batch], dim=0),
+        "target": torch.stack([item.get("target", item["y"]) for item in batch], dim=0),
         "text": torch.stack([item["text"] for item in batch], dim=0),
         "text_seq": torch.stack([item["text_seq"] for item in batch], dim=0),
         "has_news_frac": torch.stack([item["has_news_frac"] for item in batch], dim=0),
@@ -19,6 +20,10 @@ def forecast_collate(batch: list[dict]) -> dict[str, torch.Tensor | list]:
         "end_idx": torch.tensor([item["end_idx"] for item in batch], dtype=torch.long),
         "end_date": [item["end_date"] for item in batch],
     }
+    if any("last_raw_close" in item for item in batch):
+        collated["last_raw_close"] = torch.stack([item["last_raw_close"] for item in batch], dim=0)
+    if any("raw_target_price" in item for item in batch):
+        collated["raw_target_price"] = torch.stack([item["raw_target_price"] for item in batch], dim=0)
     if any("ts" in item for item in batch):
         if not all("ts" in item for item in batch):
             raise KeyError("ts must be present on every sample in the batch")

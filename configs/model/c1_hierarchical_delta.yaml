@@ -1,0 +1,40 @@
+# Canonical Hierarchical TimeXer with Bridge FFT and Delta / Return Forecasting.
+name: c1_hierarchical_delta
+variant: timexer_hierarchical
+target_mode: delta
+
+fusion:
+  kind: c1_hierarchical
+  text_at_head: false
+  text_to_patches: false
+  text_as_exogenous: true
+  global_to_patch: true
+
+d_model: 64
+n_heads: 4
+e_layers: 3
+d_ff: 256
+dropout: 0.1
+text_dim: 15
+n_features: null
+n_ts_features: 25
+fft_mode: bridge
+
+use_prototypes: false
+n_prototypes: 10
+d_min: 0.5
+
+head:
+  pool: last
+  type: linear
+  hidden: 128
+  dropout: 0.0
+
+loss:
+  kind: huber
+  delta: 0.5
+  lambda_c: 0.1
+  lambda_e: 0.1
+  lambda_d: 0.01
+  gamma_dir: 0.0
+  alpha_corr: 0.0

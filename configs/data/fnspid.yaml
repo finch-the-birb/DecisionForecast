@@ -14,6 +14,7 @@ horizons: [7, 14, 30]
 
 features: [close, volume, open, high, low]
 target: close
+target_mode: level            # level (default LTSF RevIN) | delta (return forecasting)
 normalize: per_window          # per_window | per_ticker_zscore (legacy)
 
 split:

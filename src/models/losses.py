@@ -46,20 +46,24 @@ def correlation_penalty(pred: torch.Tensor, target: torch.Tensor, eps: float = 1
 def compute_task_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
-    loss_kind: str = "mse",
-    huber_delta: float = 1.0,
-    gamma_dir: float = 0.1,
-    alpha_corr: float = 0.3,
+    loss_kind: str = "huber",
+    huber_delta: float = 0.5,
+    gamma_dir: float = 0.0,
+    alpha_corr: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    kind = str(loss_kind)
-    base = _regression_loss(pred, target, kind, float(huber_delta))
-    l_dir = directional_penalty(pred, target) if kind in _DIR_KINDS else pred.new_zeros(())
-    l_corr = correlation_penalty(pred, target) if kind in _CORR_KINDS else pred.new_zeros(())
+    base = _regression_loss(pred, target, loss_kind, float(huber_delta))
     l_task = base
-    if kind in _DIR_KINDS:
+
+    # Штраф за несовпадение знака движения на горизонте
+    l_dir = directional_penalty(pred, target) if float(gamma_dir) > 0.0 else pred.new_zeros(())
+    if float(gamma_dir) > 0.0:
         l_task = l_task + float(gamma_dir) * l_dir
-    if kind in _CORR_KINDS:
+
+    # Штраф за некоррелированность формы траектории (1 - Pearson r)
+    l_corr = correlation_penalty(pred, target) if float(alpha_corr) > 0.0 else pred.new_zeros(())
+    if float(alpha_corr) > 0.0:
         l_task = l_task + float(alpha_corr) * l_corr
+
     metrics = {
         "l_pred": float(base.detach()),
         "l_dir": float(l_dir.detach()),

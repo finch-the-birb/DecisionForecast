@@ -304,6 +304,7 @@ class FNSPIDForecastDataset(Dataset):
         feature_roles: tuple[str, ...] | None = None,
         close_idx: int | None = None,
         ts_roles: tuple[str, ...] | None = None,
+        target_mode: str = "level",
     ) -> None:
         self.indices = indices
         self.store = store
@@ -320,6 +321,7 @@ class FNSPIDForecastDataset(Dataset):
         self.feature_roles = None if feature_roles is None else tuple(feature_roles)
         self.close_idx = self.target_idx if close_idx is None else int(close_idx)
         self.ts_roles = None if ts_roles is None else tuple(ts_roles)
+        self.target_mode = str(target_mode)
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -329,6 +331,9 @@ class FNSPIDForecastDataset(Dataset):
         ts = self.series[wi.ticker]
         raw_x = ts.features[wi.start_idx : wi.end_idx]
         raw_y = ts.target[wi.end_idx : wi.end_idx + self.horizon]
+        raw_close_t = float(raw_x[-1, self.close_idx])
+        denom = raw_close_t if abs(raw_close_t) > 1e-6 else 1.0
+
         if self.normalize == "per_window":
             mean = raw_x.mean(axis=0)
             std = raw_x.std(axis=0)
@@ -343,17 +348,26 @@ class FNSPIDForecastDataset(Dataset):
             else:
                 t_mean = float(mean[self.target_idx])
                 t_std = float(std[self.target_idx])
-            y = ((raw_y.astype(np.float64) - t_mean) / t_std).astype(np.float32)
+            if self.target_mode == "delta":
+                y = ((raw_y.astype(np.float64) - raw_close_t) / denom).astype(np.float32)
+            else:
+                y = ((raw_y.astype(np.float64) - t_mean) / t_std).astype(np.float32)
             y_mean, y_std = t_mean, t_std
         elif self.normalize == "selective":
             if not self.feature_roles:
                 raise RuntimeError("normalize=selective requires feature_roles")
             x, y_mean, y_std = selective_window(raw_x, self.feature_roles, self.close_idx)
-            y = ((raw_y.astype(np.float64) - y_mean) / y_std).astype(np.float32)
+            if self.target_mode == "delta":
+                y = ((raw_y.astype(np.float64) - raw_close_t) / denom).astype(np.float32)
+            else:
+                y = ((raw_y.astype(np.float64) - y_mean) / y_std).astype(np.float32)
         else:
             x = np.asarray(raw_x, dtype=np.float32)
-            y = np.asarray(raw_y, dtype=np.float32)
             y_mean, y_std = float(ts.target_mean), float(ts.target_std)
+            if self.target_mode == "delta":
+                y = ((raw_y.astype(np.float64) - raw_close_t) / denom).astype(np.float32)
+            else:
+                y = np.asarray(raw_y, dtype=np.float32)
         t_len = wi.end_idx - wi.start_idx
         if self.text_enabled and ts.text_seq is not None:
             text_seq = ts.text_seq[wi.start_idx : wi.end_idx]
@@ -376,6 +390,7 @@ class FNSPIDForecastDataset(Dataset):
         item = {
             "x": torch.from_numpy(np.asarray(x, dtype=np.float32).copy()),
             "y": torch.from_numpy(np.asarray(y, dtype=np.float32).copy()),
+            "target": torch.from_numpy(np.asarray(y, dtype=np.float32).copy()),
             "y_mean": torch.tensor(y_mean, dtype=torch.float32),
             "y_std": torch.tensor(y_std, dtype=torch.float32),
             "text": torch.from_numpy(np.asarray(text, dtype=np.float32)),
@@ -384,6 +399,8 @@ class FNSPIDForecastDataset(Dataset):
             "ticker": wi.ticker,
             "end_idx": wi.end_idx,
             "end_date": wi.end_date,
+            "last_raw_close": torch.tensor(raw_close_t, dtype=torch.float32),
+            "raw_target_price": torch.from_numpy(np.asarray(raw_y, dtype=np.float32).copy()),
         }
         if ts.ts_exo is not None:
             if not self.ts_roles:
@@ -991,6 +1008,12 @@ def build_datasets(
     def _cap(items: list[WindowIndex], limit) -> list[WindowIndex]:
         return _cap_recent(items, limit)
 
+    target_mode = str(
+        cfg.model.get("target_mode")
+        if "model" in cfg and cfg.model.get("target_mode") is not None
+        else cfg.data.get("target_mode", "level")
+    )
+
     common = dict(
         store=store,
         series=series,
@@ -1006,6 +1029,7 @@ def build_datasets(
         feature_roles=feature_roles([str(column) for column in features]) if normalize == "selective" else None,
         close_idx=features.index("close") if normalize == "selective" and "close" in [str(column) for column in features] else target_idx,
         ts_roles=ts_roles,
+        target_mode=target_mode,
     )
     train_ds = FNSPIDForecastDataset(_cap(train_idx, cfg.train.max_train_windows), **common)
     val_ds = FNSPIDForecastDataset(_cap(val_idx, cfg.train.max_val_windows), **common)
