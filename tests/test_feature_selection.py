@@ -33,7 +33,7 @@ def test_huber_delta_matches_the_locked_forecasting_loss() -> None:
     assert model.get_params()["objective"] == "huber"
     assert model.get_params()["alpha"] == 0.5
     assert HUBER_DELTA == 0.5
-    assert TOP_K == 25
+    assert TOP_K == 30
     assert CORR_THRESHOLD == 0.85
 
 

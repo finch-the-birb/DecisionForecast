@@ -26,6 +26,7 @@ STATIONARY_PREFIXES = (
     "obv_z_",
     "eii_",
     "queue_acc_",
+    "fft_harm_",
 )
 
 

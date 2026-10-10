@@ -114,6 +114,7 @@ def main() -> None:
     parser.add_argument("--ticker-set", required=True, choices=["dev", "paper"])
     parser.add_argument("--fold", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--top-k", type=int, default=30)
     parser.add_argument("--n-estimators", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
@@ -211,34 +212,35 @@ def main() -> None:
     signature = fit_signature(
         features,
         target,
+        top_k=int(args.top_k),
         n_estimators=int(args.n_estimators),
         seed=int(args.seed),
     )
     signature_path = signature_cache_path(root, args.ticker_set, fold.fold_id)
-    write_signature(
-        signature_path,
-        signature,
-        {
-            "ticker_set": args.ticker_set,
-            "fold_id": fold.fold_id,
-            "train_start": str(pd.Timestamp(fold.train_start).date()),
-            "train_end": str(pd.Timestamp(fold.train_end).date()),
-            "val_start": str(pd.Timestamp(fold.val_start).date()),
-            "horizon": horizon,
-            "embargo": EMBARGO_BARS,
-            "lookback": lookback,
-            "huber_delta": HUBER_DELTA,
-            "corr_threshold": CORR_THRESHOLD,
-            "top_k": TOP_K,
-            "n_tickers": len(frames),
-            "tickers": list(frames),
-            "label_date_min": str(pd.Timestamp(label_dates.min()).date()),
-            "label_date_max": str(pd.Timestamp(label_dates.max()).date()),
-            "target": "log_return",
-            "target_definition": "log(close[end_idx + horizon - 1] / close[end_idx - 1])",
-            "text_fit": "pooled_train_articles",
-        },
-    )
+    meta = {
+        "ticker_set": args.ticker_set,
+        "fold_id": fold.fold_id,
+        "train_start": str(pd.Timestamp(fold.train_start).date()),
+        "train_end": str(pd.Timestamp(fold.train_end).date()),
+        "val_start": str(pd.Timestamp(fold.val_start).date()),
+        "horizon": horizon,
+        "embargo": EMBARGO_BARS,
+        "lookback": lookback,
+        "huber_delta": HUBER_DELTA,
+        "corr_threshold": CORR_THRESHOLD,
+        "top_k": int(args.top_k),
+        "n_tickers": len(frames),
+        "tickers": list(frames),
+        "label_date_min": str(pd.Timestamp(label_dates.min()).date()),
+        "label_date_max": str(pd.Timestamp(label_dates.max()).date()),
+        "target": "log_return",
+        "target_definition": "log(close[end_idx + horizon - 1] / close[end_idx - 1])",
+        "text_fit": "pooled_train_articles",
+    }
+    write_signature(signature_path, signature, meta)
+    if int(args.top_k) == 30:
+        sig_30ts_path = root / "cache" / "selected_signatures" / f"{args.ticker_set}_fold{fold.fold_id}_signature_30ts.json"
+        write_signature(sig_30ts_path, signature, meta)
     log.info(
         "Signature %s rows=%d label_dates=%s..%s columns=%s",
         signature_path,

@@ -213,6 +213,7 @@ def fit_signature(
     features: pd.DataFrame,
     target: np.ndarray,
     *,
+    top_k: int = TOP_K,
     n_estimators: int = 200,
     min_child_samples: int = 20,
     seed: int = 0,
@@ -222,6 +223,7 @@ def fit_signature(
         features,
         target,
         mask,
+        top_k=top_k,
         n_estimators=n_estimators,
         min_child_samples=min_child_samples,
         seed=seed,
@@ -255,10 +257,10 @@ def read_signature(path: Path, *, horizon: int, lookback: int) -> dict:
         raise ValueError(f"{path} format is {payload.get('format')!r}, expected {SIGNATURE_FORMAT}")
     ts_columns = [str(name) for name in payload["ts_columns"]]
     text_columns = [str(name) for name in payload["text_columns"]]
-    if len(ts_columns) != TS_WIDTH or ts_columns[0] != LEVEL_COLUMN or text_columns != list(COMPACT_COLUMNS):
+    if len(ts_columns) not in (26, 31, TS_WIDTH) or ts_columns[0] != LEVEL_COLUMN or text_columns != list(COMPACT_COLUMNS):
         raise ValueError(
             f"{path} has technical columns {ts_columns[:1]}… ({len(ts_columns)}) and text {text_columns}; "
-            f"expected {LEVEL_COLUMN} plus {TOP_K} indicators and {list(COMPACT_COLUMNS)}"
+            f"expected {LEVEL_COLUMN} plus 25 or 30 indicators and {list(COMPACT_COLUMNS)}"
         )
     if int(payload["horizon"]) != int(horizon) or int(payload["lookback"]) != int(lookback):
         raise ValueError(

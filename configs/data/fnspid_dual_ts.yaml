@@ -8,5 +8,5 @@ defaults:
 name: fnspid_dual_ts
 features_mode: dual_ts
 features: [close, volume, open, high, low]
-signature_path: ${data.root}/cache/selected_signatures/paper_fold1_signature.json
+signature_path: ${oc.env:SIGNATURE_PATH,${data.root}/cache/selected_signatures/paper_fold1_signature_30ts.json}
 technical_cache_dir: ${data.root}/cache/technical

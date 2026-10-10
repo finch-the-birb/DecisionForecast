@@ -24,7 +24,7 @@ import pandas as pd
 
 from src.data.text_compact import COMPACT_COLUMNS
 
-TOP_K = 25
+TOP_K = 30
 LEVEL_COLUMN = "close"
 TS_WIDTH = TOP_K + 1
 CORR_THRESHOLD = 0.85

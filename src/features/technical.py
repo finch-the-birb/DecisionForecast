@@ -78,6 +78,7 @@ def base_feature_names(
     names += [f"cfi_n{n}" for n in windows]
     names += [f"mrd_n{n}" for n in windows]
     names += [f"cgo_n{n}" for n in windows]
+    names += [f"fft_harm_{k}" for k in range(1, 11)]
     names += list(_CALENDAR_COLUMNS)
     return names
 
@@ -224,6 +225,7 @@ def _base_features(
     columns.update(_block_momentum(close, windows, eps))
     columns.update(_block_volume(high, low, close, volume, windows, eps))
     columns.update(_block_becker(open_, high, low, close, volume, windows, eii_windows, eps))
+    columns.update(_block_fft(close, lookback=60))
     columns.update(_block_calendar(dates, index))
     names = base_feature_names(windows, return_lags, eii_windows)
     missing = [name for name in names if name not in columns]
@@ -438,6 +440,35 @@ def _block_becker(
         columns[f"cgo_n{window}"] = pd.Series(cgo, index=close.index, dtype=np.float64)
 
     return columns
+
+
+def _block_fft(close: pd.Series, lookback: int = 60) -> dict[str, pd.Series]:
+    """Causal rolling rFFT harmonic log-amplitudes on Close price.
+
+    For each bar t, uses only bars t-lookback+1..t+1 (window of length lookback).
+    Bars before the first full window (t < lookback - 1) stay NaN.
+    Window is centered by subtracting its mean, rFFT is computed, and log-amplitudes
+    of the first 10 non-zero harmonics (periods 60 down to 6 bars) are extracted:
+    fft_harm_k = ln(1 + |spectrum[k]|).
+    """
+    if lookback < 12:
+        raise ValueError(f"lookback must be at least 12 for 10 harmonics, got {lookback}")
+    close_np = close.to_numpy(dtype=np.float64)
+    n_rows = len(close_np)
+    out = np.full((n_rows, 10), np.nan, dtype=np.float64)
+    if n_rows >= lookback:
+        view = sliding_window_view(close_np, lookback)
+        finite = np.isfinite(view).all(axis=1)
+        if finite.any():
+            valid_windows = view[finite]
+            centered = valid_windows - np.mean(valid_windows, axis=1, keepdims=True)
+            spectrum = np.abs(np.fft.rfft(centered, axis=1))
+            harmonics = np.log1p(spectrum[:, 1:11])
+            out[lookback - 1 :][finite] = harmonics
+    return {
+        f"fft_harm_{k}": pd.Series(out[:, k - 1], index=close.index, dtype=np.float64)
+        for k in range(1, 11)
+    }
 
 
 def _rolling_weighted_sum(values: np.ndarray, weights: np.ndarray) -> np.ndarray:

@@ -23,6 +23,7 @@ from src.models.timexer_c1_compact import TimeXerC1Compact
 from src.models.timexer_dual import TimeXerDual
 from src.models.timexer_factored import TimeXerFactored
 from src.models.timexer_hierarchical import TimeXerHierarchical
+from src.models.timexer_hierarchical_mlp import TimeXerHierarchicalMLP
 from src.models.timexer_inverted import TimeXerInverted
 from src.models.timexer_late_fusion import TimeXerLateFusion
 from src.models.timexer_plain import TimeXerPlain
@@ -185,7 +186,12 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_pool=head_pool,
         )
     variant = str(cfg.model.get("variant", ""))
-    if name in {"c1_dual", "c1_hierarchical"} or variant in {"timexer_dual", "timexer_hierarchical"}:
+    if (
+        name in {"c1_dual", "c1_hierarchical", "c1_hierarchical_mlp"}
+        or "c1_hierarchical" in name
+        or "c1_dual" in name
+        or variant in {"timexer_dual", "timexer_hierarchical", "timexer_hierarchical_mlp"}
+    ):
         text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
         if n_features not in (1, 2, 5) or text_dim != 15:
             raise ValueError(
@@ -198,19 +204,20 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
                 f"model.n_features={int(declared)} does not match {n_features} data channels"
             )
         n_ts_features = int(cfg.model.get("n_ts_features", 0))
-        if str(cfg.data.get("features_mode", "")) == "dual_ts" and n_ts_features != 25:
+        if str(cfg.data.get("features_mode", "")) == "dual_ts" and n_ts_features not in (25, 30):
             raise ValueError(
-                "data=fnspid_dual_ts requires model.n_ts_features=25, "
+                "data=fnspid_dual_ts requires model.n_ts_features in (25, 30), "
                 f"got {n_ts_features}"
             )
         d_model = int(cfg.model.d_model)
         raw_d_ff = cfg.model.get("d_ff", None)
         d_ff = 4 * d_model if raw_d_ff is None else int(raw_d_ff)
-        model_cls = (
-            TimeXerHierarchical
-            if ("hierarchical" in name or variant == "timexer_hierarchical")
-            else TimeXerDual
-        )
+        if "hierarchical_mlp" in name or variant == "timexer_hierarchical_mlp":
+            model_cls = TimeXerHierarchicalMLP
+        elif "hierarchical" in name or variant == "timexer_hierarchical":
+            model_cls = TimeXerHierarchical
+        else:
+            model_cls = TimeXerDual
         fft_mode = str(cfg.model.get("fft_mode", "patch"))
         return model_cls(
             n_features=n_features,
@@ -562,8 +569,12 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         tuple(text_seq.shape),
                         None if ts is None else tuple(ts.shape),
                     )
-                    model_variant = str(cfg.model.get("variant", ""))
-                    if str(cfg.model.name) in {"c1_dual", "c1_hierarchical"} or model_variant in {"timexer_dual", "timexer_hierarchical"}:
+                    if (
+                        str(cfg.model.name) in {"c1_dual", "c1_hierarchical", "c1_hierarchical_mlp"}
+                        or "c1_hierarchical" in str(cfg.model.name)
+                        or "c1_dual" in str(cfg.model.name)
+                        or model_variant in {"timexer_dual", "timexer_hierarchical", "timexer_hierarchical_mlp"}
+                    ):
                         expected_c = len([str(column) for column in cfg.data.features])
                         lookback = int(cfg.data.lookback_T)
                         n_ts = int(cfg.model.get("n_ts_features", 0))

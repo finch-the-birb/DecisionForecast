@@ -10,6 +10,7 @@ from src.models.timexer_c1_compact import TimeXerC1Compact
 from src.models.timexer_dual import TimeXerDual
 from src.models.timexer_factored import TimeXerFactored
 from src.models.timexer_hierarchical import TimeXerHierarchical
+from src.models.timexer_hierarchical_mlp import TimeXerHierarchicalMLP
 from src.models.timexer_inverted import TimeXerInverted
 from src.models.timexer_late_fusion import TimeXerLateFusion
 from src.models.timexer_plain import TimeXerPlain
@@ -31,6 +32,7 @@ __all__ = [
     "TimeXerDual",
     "TimeXerFactored",
     "TimeXerHierarchical",
+    "TimeXerHierarchicalMLP",
     "TimeXerInverted",
     "TimeXerLateFusion",
     "TimeXerPlain",

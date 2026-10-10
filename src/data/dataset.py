@@ -755,10 +755,18 @@ def _attach_exogenous_ts(
     """
     from src.data.selected_pipeline import read_signature
 
-    signature = read_signature(Path(str(cfg.data.signature_path)), horizon=horizon, lookback=lookback)
+    sig_path = Path(str(cfg.data.signature_path))
+    if not sig_path.is_file():
+        if "_30ts" in sig_path.name:
+            alt_path = sig_path.with_name(sig_path.name.replace("_30ts", ""))
+        else:
+            alt_path = sig_path.with_name(sig_path.stem + "_30ts" + sig_path.suffix)
+        if alt_path.is_file():
+            sig_path = alt_path
+    signature = read_signature(sig_path, horizon=horizon, lookback=lookback)
     columns = [str(name) for name in signature["ts_columns"][1:]]
-    if len(columns) != _N_EXOGENOUS_TS or len(set(columns)) != _N_EXOGENOUS_TS:
-        raise ValueError(f"expected {_N_EXOGENOUS_TS} unique indicator columns, got {columns}")
+    if len(columns) not in (25, 30) or len(set(columns)) != len(columns):
+        raise ValueError(f"expected 25 or 30 unique indicator columns, got {len(columns)}: {columns}")
     roles = feature_roles(columns)
     technical_dir = Path(str(cfg.data.technical_cache_dir))
     needed = lookback + horizon
