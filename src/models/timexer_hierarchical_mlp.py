@@ -1,9 +1,8 @@
-"""Canonical 3-Layer Hierarchical TimeXer with 2-Layer MLP Projection Head.
+"""Canonical 3-Layer Hierarchical TimeXer with Modular Forecasting Head.
 
-Replaces the affine Linear head with a 2-layer MLP projection:
-Flatten -> Linear(head_nf, head_hidden) -> GELU -> Dropout(head_dropout) -> Linear(head_hidden, horizon)
-providing mathematical degrees of freedom to generate non-linear trajectory shapes (curvature,
-turns, and market regime transitions) over the forecast horizon.
+Supports both point forecasting (MLP / Linear regression) and
+distributional uncertainty forecasting (Multi-Quantile Pinball head)
+via `build_head`.
 """
 
 from __future__ import annotations
@@ -12,11 +11,12 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from src.models.heads import build_head
 from src.models.timexer_hierarchical import TimeXerHierarchical
 
 
 class TimeXerHierarchicalMLP(TimeXerHierarchical):
-    """3-layer hierarchical TimeXer with non-linear MLP projection head."""
+    """3-layer hierarchical TimeXer with modular forecasting head."""
 
     def __init__(
         self,
@@ -42,6 +42,7 @@ class TimeXerHierarchicalMLP(TimeXerHierarchical):
         head_dropout: float = 0.1,
         head_pool: str = "last",
         fft_mode: str = "bridge",
+        quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
         **kwargs,
     ) -> None:
         super().__init__(
@@ -67,18 +68,19 @@ class TimeXerHierarchicalMLP(TimeXerHierarchical):
             head_dropout=head_dropout,
             head_pool=head_pool,
             fft_mode=fft_mode,
-            **kwargs,
         )
+        del kwargs
         self.head_type = str(head_type)
         self.head_hidden = int(head_hidden)
         self.head_dropout = float(head_dropout)
+        self.quantiles = tuple(float(q) for q in quantiles) if quantiles is not None else (0.1, 0.5, 0.9)
 
-        # 2-layer MLP head for non-linear return forecasting:
-        # Flatten -> Linear(head_nf, head_hidden) -> GELU -> Dropout -> Linear(head_hidden, horizon)
-        self.head = nn.Sequential(
-            nn.Flatten(start_dim=-2),
-            nn.Linear(self.head_nf, self.head_hidden),
-            nn.GELU(),
-            nn.Dropout(self.head_dropout),
-            nn.Linear(self.head_hidden, self.horizon),
+        # Build modular forecasting head (MLP regression or multi-quantile tunnel)
+        self.head = build_head(
+            head_type=self.head_type,
+            head_nf=self.head_nf,
+            horizon=self.horizon,
+            hidden=self.head_hidden,
+            dropout=self.head_dropout,
+            quantiles=self.quantiles,
         )

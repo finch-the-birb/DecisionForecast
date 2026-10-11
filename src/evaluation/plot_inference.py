@@ -108,13 +108,27 @@ def collect_ticker_predictions(
 
         with torch.no_grad():
             out = _forecast_forward(model, x, text, text_seq, ts_exo)
-        pred_norm = out.pred.squeeze(0).cpu().numpy()  # [H]
+        pred_norm = out.pred.squeeze(0).cpu().numpy()  # [H] or [H, K]
+        has_quantiles = pred_norm.ndim == 2 and pred_norm.shape[-1] >= 2
+        if has_quantiles:
+            q_low = pred_norm[:, 0]
+            q_med = pred_norm[:, 1 if pred_norm.shape[-1] == 3 else pred_norm.shape[-1] // 2]
+            q_high = pred_norm[:, -1]
+        else:
+            q_med = pred_norm
+            q_low = None
+            q_high = None
+
         is_delta = getattr(test_ds, "target_mode", "level") == "delta"
         if is_delta:
             last_close_val = float(item["last_raw_close"].item()) if "last_raw_close" in item else float(prices[wi.end_idx - 1])
-            pred_dollars = last_close_val * (1.0 + pred_norm)
+            pred_dollars = last_close_val * (1.0 + q_med)
+            dollars_low = last_close_val * (1.0 + q_low) if q_low is not None else None
+            dollars_high = last_close_val * (1.0 + q_high) if q_high is not None else None
         else:
-            pred_dollars = pred_norm * y_std + y_mean
+            pred_dollars = q_med * y_std + y_mean
+            dollars_low = q_low * y_std + y_mean if q_low is not None else None
+            dollars_high = q_high * y_std + y_mean if q_high is not None else None
 
         last_close_date = dates.iloc[wi.end_idx - 1]
         last_close_price = prices[wi.end_idx - 1]
@@ -134,11 +148,15 @@ def collect_ticker_predictions(
         if step_num % stride == 0 or step_num == len(ticker_windows) - 1:
             traj_dates = [last_close_date, *future_dates]
             traj_prices = [last_close_price, *pred_dollars]
-            trajectories.append({
+            traj_dict: dict[str, Any] = {
                 "dates": traj_dates,
                 "prices": traj_prices,
                 "start_date": last_close_date,
-            })
+            }
+            if dollars_low is not None and dollars_high is not None:
+                traj_dict["low"] = [last_close_price, *dollars_low]
+                traj_dict["high"] = [last_close_price, *dollars_high]
+            trajectories.append(traj_dict)
 
     mae_dollars = float(np.mean(all_pred_errors))
     da_pct = float(np.mean(all_da_matches)) * 100.0
@@ -178,6 +196,22 @@ def plot_single_ticker(
     color_forecast = "#1f77b4"
     for i, traj in enumerate(trajectories):
         is_first = (i == 0)
+        has_tunnel = "low" in traj and "high" in traj
+        if has_tunnel:
+            ax.fill_between(
+                traj["dates"],
+                traj["low"],
+                traj["high"],
+                color=color_forecast,
+                alpha=0.20,
+                label="80% Uncertainty Corridor [q0.10, q0.90]" if is_first else None,
+                zorder=2,
+            )
+        pred_label = (
+            f"Forecast Median (H={horizon})"
+            if has_tunnel
+            else f"Forecast (H={horizon})"
+        )
         ax.plot(
             traj["dates"],
             traj["prices"],
@@ -187,7 +221,7 @@ def plot_single_ticker(
             marker="o",
             markersize=3.0,
             alpha=0.85,
-            label=f"Forecast (H={horizon})" if is_first else None,
+            label=pred_label if is_first else None,
             zorder=4,
         )
 

@@ -1,6 +1,7 @@
 """Forecasting models (A/B/C0/C1)."""
 
 from src.models.dlinear import DLinear
+from src.models.heads import LinearHead, QuantileHead, RegressionHead, build_head
 from src.models.outputs import ModelOutput
 from src.models.prototypes import PrototypeLosses, PrototypeModule
 from src.models.timexer_b import TimeXerB
@@ -20,10 +21,14 @@ from src.models.timexl_integration import PrototypeResidual
 
 __all__ = [
     "DLinear",
+    "LinearHead",
     "ModelOutput",
     "PrototypeLosses",
     "PrototypeModule",
     "PrototypeResidual",
+    "QuantileHead",
+    "RegressionHead",
+    "build_head",
     "TimeXLModelA",
     "TimeXerB",
     "TimeXerC0",

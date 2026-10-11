@@ -28,7 +28,11 @@ def compute_pred_loss(
     gamma_dir: float = 0.0,
     alpha_corr: float = 0.0,
     beta_scale: float = 0.0,
+    lambda_cross: float = 1.0,
+    quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
+    **kwargs,
 ) -> tuple[torch.Tensor, dict[str, float]]:
+    del kwargs
     l_task, task_metrics = compute_task_loss(
         output.pred,
         target,
@@ -37,6 +41,8 @@ def compute_pred_loss(
         gamma_dir=gamma_dir,
         alpha_corr=alpha_corr,
         beta_scale=beta_scale,
+        lambda_cross=lambda_cross,
+        quantiles=quantiles,
     )
     if output.proto_losses is None:
         zeros = l_task.new_zeros(())

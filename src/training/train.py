@@ -67,6 +67,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
     head_hidden = int(head_cfg.get("hidden", 128))
     head_dropout = float(head_cfg.get("dropout", 0.0))
     head_pool = str(head_cfg.get("pool", "mean"))
+    head_quantiles = tuple(float(q) for q in head_cfg.get("quantiles", (0.1, 0.5, 0.9)))
     if name == "a":
         return TimeXLModelA(
             n_features=n_features,
@@ -219,6 +220,9 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
         else:
             model_cls = TimeXerDual
         fft_mode = str(cfg.model.get("fft_mode", "patch"))
+        model_kwargs: dict[str, Any] = {}
+        if model_cls is TimeXerHierarchicalMLP:
+            model_kwargs["quantiles"] = head_quantiles
         return model_cls(
             n_features=n_features,
             seq_len=seq_len,
@@ -242,6 +246,7 @@ def build_model(cfg: DictConfig) -> torch.nn.Module:
             head_dropout=head_dropout,
             head_pool=head_pool,
             fft_mode=fft_mode,
+            **model_kwargs,
         )
     if name == "c1_compact":
         text_dim = int(cfg.model.get("text_dim", cfg.data.text.dim))
@@ -522,6 +527,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
     gamma_dir = float(loss_cfg.get("gamma_dir", 0.1))
     alpha_corr = float(loss_cfg.get("alpha_corr", 0.3))
     beta_scale = float(loss_cfg.get("beta_scale", 0.0))
+    lambda_cross = float(loss_cfg.get("lambda_cross", 1.0))
     target_mode = str(
         cfg.model.get("target_mode")
         if "model" in cfg and cfg.model.get("target_mode") is not None
@@ -540,6 +546,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             mlflow.log_param("n_params", n_params)
             mlflow.log_param("target_mode", target_mode)
             mlflow.log_param("beta_scale", beta_scale)
+            mlflow.log_param("lambda_cross", lambda_cross)
             if n_backbone_g12 is not None:
                 mlflow.log_param("n_params_backbone_g12", n_backbone_g12)
             fusion_cfg = cfg.model.get("fusion")
@@ -557,6 +564,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             sum_l_e = 0.0
             sum_l_d = 0.0
             sum_l_scale = 0.0
+            sum_l_cross = 0.0
+            sum_l_pinball = 0.0
             n_batches = 0
             for batch in train_loader:
                 x, y, text, text_seq, ts = _forecast_inputs(batch, device)
@@ -658,6 +667,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     gamma_dir=gamma_dir,
                     alpha_corr=alpha_corr,
                     beta_scale=beta_scale,
+                    lambda_cross=lambda_cross,
                 )
                 loss.backward()
                 if cfg.train.grad_clip:
@@ -669,6 +679,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 sum_l_e += train_metrics["l_e"]
                 sum_l_d += train_metrics["l_d"]
                 sum_l_scale += train_metrics.get("l_scale", 0.0)
+                sum_l_cross += train_metrics.get("l_cross", 0.0)
+                sum_l_pinball += train_metrics.get("l_pinball", 0.0)
                 n_batches += 1
 
             if epoch % int(cfg.train.eval_every) == 0:
@@ -679,6 +691,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 avg_le = sum_l_e / max(n_batches, 1)
                 avg_ld = sum_l_d / max(n_batches, 1)
                 avg_lscale = sum_l_scale / max(n_batches, 1)
+                avg_lcross = sum_l_cross / max(n_batches, 1)
+                avg_lpinball = sum_l_pinball / max(n_batches, 1)
                 proto_nn = float("nan")
                 proto_pair = float("nan")
                 if hasattr(model, "proto"):
@@ -686,19 +700,24 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     if init_bank is not None:
                         proto_nn = float(model.proto.nn_dist_mean(init_bank.to(device)))
                 da_val_str = f" val_da={val_metrics['da']:.4f}" if "da" in val_metrics else ""
+                q_val_str = ""
+                if "quantile_coverage" in val_metrics:
+                    q_val_str = f" cov80={val_metrics['quantile_coverage']:.4f} sharp={val_metrics['quantile_sharpness']:.4f} winkler={val_metrics['quantile_winkler']:.4f}"
                 log.info(
-                    "Epoch %d — train_loss=%.4f l_pred=%.4f l_scale=%.4f l_c=%.4f l_e=%.4f l_d=%.4f "
-                    "val_mse=%.4f val_mae=%.4f%s proto_nn_dist_mean=%s proto_min_pairwise_dist=%s",
+                    "Epoch %d — train_loss=%.4f l_pred=%.4f l_scale=%.4f l_cross=%.4f l_c=%.4f l_e=%.4f l_d=%.4f "
+                    "val_mse=%.4f val_mae=%.4f%s%s proto_nn_dist_mean=%s proto_min_pairwise_dist=%s",
                     epoch,
                     avg_loss,
                     avg_lp,
                     avg_lscale,
+                    avg_lcross,
                     avg_lc,
                     avg_le,
                     avg_ld,
                     val_metrics["mse"],
                     val_metrics["mae"],
                     da_val_str,
+                    q_val_str,
                     f"{proto_nn:.4f}" if proto_nn == proto_nn else "n/a",
                     f"{proto_pair:.4f}" if proto_pair == proto_pair else "n/a",
                 )
@@ -713,11 +732,18 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         "val_mse": val_metrics["mse"],
                         "val_mae": val_metrics["mae"],
                     }
+                    if "l_cross" in train_metrics:
+                        row["train_l_cross"] = avg_lcross
+                    if "l_pinball" in train_metrics:
+                        row["train_l_pinball"] = avg_lpinball
                     if "da" in val_metrics:
                         row["val_da"] = val_metrics["da"]
                     if "mae_denorm" in val_metrics:
                         row["val_mae_denorm"] = val_metrics["mae_denorm"]
-                    for k in ("delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm"):
+                    for k in (
+                        "delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm",
+                        "quantile_coverage", "quantile_sharpness", "quantile_winkler"
+                    ):
                         if k in val_metrics:
                             row[f"val_{k}"] = val_metrics[k]
                     if proto_nn == proto_nn:
@@ -755,16 +781,20 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         delta_str = ""
         if "delta_mse" in test_metrics:
             delta_str = f" delta_mse={test_metrics['delta_mse']:.6f} delta_da={test_metrics['delta_da']:.4f} mse_price={test_metrics.get('test_mse_price', 0.0):.4f}"
+        q_test_str = ""
+        if "quantile_coverage" in test_metrics:
+            q_test_str = f" cov80={test_metrics['quantile_coverage']:.4f} sharp={test_metrics['quantile_sharpness']:.4f} winkler={test_metrics['quantile_winkler']:.4f}"
         log.info(
-            "Test — mse=%.4f mae=%.4f%s mae_denorm=%s%s",
+            "Test — mse=%.4f mae=%.4f%s mae_denorm=%s%s%s",
             test_metrics["mse"],
             test_metrics["mae"],
             da_test_str,
             f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
             delta_str,
+            q_test_str,
         )
         log.info(
-            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f%s mae_denorm=%s%s",
+            "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f%s mae_denorm=%s%s%s",
             cfg.model.name,
             cfg.data.horizon,
             test_metrics["mse"],
@@ -772,6 +802,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             da_test_str,
             f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
             delta_str,
+            q_test_str,
         )
         log.info(
             "H1_ROW model=%s horizon=%s mse=%.4f mae=%.4f%s",
@@ -794,7 +825,10 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         }
         if "da" in test_metrics:
             metrics_dict["da"] = test_metrics["da"]
-        for k in ("delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm"):
+        for k in (
+            "delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm",
+            "quantile_coverage", "quantile_sharpness", "quantile_winkler"
+        ):
             if k in test_metrics:
                 metrics_dict[k] = test_metrics[k]
         metrics_path.write_text(
@@ -807,7 +841,10 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 test_log["test_da"] = test_metrics["da"]
             if "mae_denorm" in test_metrics:
                 test_log["test_mae_denorm"] = test_metrics["mae_denorm"]
-            for k in ("delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm"):
+            for k in (
+                "delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm",
+                "quantile_coverage", "quantile_sharpness", "quantile_winkler"
+            ):
                 if k in test_metrics:
                     test_log[k] = test_metrics[k]
             mlflow.log_metrics(test_log)
