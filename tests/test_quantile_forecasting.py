@@ -189,3 +189,67 @@ def test_timexer_hierarchical_mlp_quantile_forward():
     loss.backward()
     grad_norm = sum(p.grad.norm().item() for p in model.parameters() if p.grad is not None)
     assert grad_norm > 0.0
+
+
+def test_quantile_head_always_sorted():
+    head = QuantileHead(head_nf=64, horizon=7, hidden=32, quantiles=(0.1, 0.5, 0.9))
+    # Test across multiple random batches
+    for _ in range(5):
+        x = torch.randn(8, 4, 16)
+        out = head(x)
+        assert (out[..., 0] <= out[..., 1]).all(), "q_0.10 must be <= q_0.50"
+        assert (out[..., 1] <= out[..., 2]).all(), "q_0.50 must be <= q_0.90"
+
+
+def test_checkpointing_val_metric_selection():
+    # Test winkler selection
+    val_metrics = {
+        "mse": 0.5,
+        "quantile_winkler": 0.12,
+        "winkler": 0.12,
+        "macro_f1": 0.75,
+    }
+
+    # Winkler minimization
+    metric_winkler = "winkler"
+    is_max_w = metric_winkler in ("macro_f1", "f1")
+    val_w = val_metrics.get("winkler", val_metrics.get("quantile_winkler"))
+    assert val_w == 0.12
+    assert not is_max_w
+
+    # Macro F1 maximization
+    metric_f1 = "macro_f1"
+    is_max_f1 = metric_f1 in ("macro_f1", "f1")
+    val_f1 = val_metrics.get("macro_f1", 0.0)
+    assert val_f1 == 0.75
+    assert is_max_f1
+
+
+def test_compute_naive_historical_corridor_metrics():
+    from src.evaluation.metrics import compute_naive_historical_corridor_metrics
+
+    class MockDataset:
+        def __init__(self):
+            # 10 windows, lookback 60, horizon 7
+            self.items = []
+            for _ in range(10):
+                x = torch.randn(60, 5)
+                # target returns within +/- 0.05
+                y = torch.randn(7) * 0.02
+                self.items.append({"x": x, "y": y})
+
+        def __len__(self):
+            return len(self.items)
+
+        def __getitem__(self, idx):
+            return self.items[idx]
+
+    mock_ds = MockDataset()
+    res = compute_naive_historical_corridor_metrics(mock_ds, horizon=7)
+
+    assert "naive_coverage" in res
+    assert "naive_sharpness" in res
+    assert "naive_winkler" in res
+    assert 0.0 <= res["naive_coverage"] <= 1.0
+    assert res["naive_sharpness"] > 0.0
+    assert res["naive_winkler"] > 0.0

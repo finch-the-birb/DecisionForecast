@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import Any
+import numpy as np
 import torch
+from src.models.losses import pinball_loss
 
 
 def mse(pred: torch.Tensor, target: torch.Tensor) -> float:
@@ -160,10 +163,84 @@ def compute_quantile_metrics(
     cov = empirical_coverage(pred, target, lower_idx=0, upper_idx=-1)
     shp = tunnel_sharpness(pred, lower_idx=0, upper_idx=-1)
     wkl = winkler_score(pred, target, alpha=alpha, lower_idx=0, upper_idx=-1)
+    pin = float(pinball_loss(pred, target).item())
     return {
         "quantile_coverage": cov,
         "quantile_sharpness": shp,
         "quantile_winkler": wkl,
+        "coverage": cov,
+        "sharpness": shp,
+        "winkler": wkl,
+        "pinball": pin,
+        "quantile_pinball": pin,
+    }
+
+
+def compute_naive_historical_corridor_metrics(
+    test_ds: Any,
+    horizon: int = 7,
+    quantiles: tuple[float, float] = (0.1, 0.9),
+) -> dict[str, float]:
+    """Вычисляет Coverage, Sharpness и Winkler для наивного коридора на основе 60-дневной волатильности окна: q = +/- 1.28 * std(window)."""
+    preds: list[torch.Tensor] = []
+    targets: list[torch.Tensor] = []
+
+    # 80% confidence interval standard normal critical value (z ≈ 1.28155)
+    z_score = 1.28155
+    steps = np.sqrt(np.arange(1, horizon + 1))
+
+    has_series = hasattr(test_ds, "series") and hasattr(test_ds, "indices")
+    close_idx = getattr(test_ds, "close_idx", 0)
+
+    for idx in range(len(test_ds)):
+        item = test_ds[idx]
+        y = item["y"]
+        if not isinstance(y, torch.Tensor):
+            y = torch.tensor(y, dtype=torch.float32)
+        targets.append(y.cpu() if y.dim() == 1 else y.cpu().squeeze(-1))
+
+        if has_series:
+            wi = test_ds.indices[idx]
+            ts = test_ds.series[wi.ticker]
+            raw_close = ts.features[wi.start_idx : wi.end_idx, close_idx]
+            if len(raw_close) > 1:
+                daily_rets = (raw_close[1:] - raw_close[:-1]) / np.maximum(raw_close[:-1], 1e-6)
+                sigma = float(np.std(daily_rets))
+            else:
+                sigma = 0.01
+        else:
+            x = item.get("x")
+            if isinstance(x, torch.Tensor) and x.dim() >= 2 and x.size(0) > 1:
+                close_vals = x[:, 0].cpu().numpy()
+                diffs = close_vals[1:] - close_vals[:-1]
+                sigma = float(np.std(diffs))
+            else:
+                sigma = 0.01
+
+        if sigma < 1e-8 or np.isnan(sigma):
+            sigma = 0.01
+
+        q_low = -z_score * sigma * steps
+        q_med = np.zeros(horizon)
+        q_high = z_score * sigma * steps
+
+        tunnel = np.stack([q_low, q_med, q_high], axis=-1)  # [horizon, 3]
+        preds.append(torch.tensor(tunnel, dtype=torch.float32))
+
+    if not targets:
+        return {"naive_coverage": 0.0, "naive_sharpness": 0.0, "naive_winkler": 0.0}
+
+    pred_cat = torch.stack(preds, dim=0)   # [N, horizon, 3]
+    tgt_cat = torch.stack(targets, dim=0)  # [N, horizon]
+
+    cov = empirical_coverage(pred_cat, tgt_cat)
+    shp = tunnel_sharpness(pred_cat)
+    wkl = winkler_score(pred_cat, tgt_cat, alpha=0.20)
+
+    return {
+        "naive_coverage": cov,
+        "naive_sharpness": shp,
+        "naive_winkler": wkl,
         "coverage": cov,
         "sharpness": shp,
         "winkler": wkl,

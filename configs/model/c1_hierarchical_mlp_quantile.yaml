@@ -4,6 +4,10 @@ name: c1_hierarchical_mlp_quantile
 variant: timexer_hierarchical_mlp
 target_mode: delta
 
+train:
+  val_metric: winkler   # Оптимизация чекпоинта по качеству доверительного интервала
+  patience: 7
+
 fusion:
   kind: c1_hierarchical
   text_at_head: false

@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 
 from src.data.collate import make_forecast_loader
 from src.data.dataset import build_datasets, log_text_coverage
-from src.evaluation.metrics import compute_metrics
+from src.evaluation.metrics import compute_metrics, compute_naive_historical_corridor_metrics
 from src.explain.h3 import write_h3_artifacts
 from src.models.dlinear import DLinear
 from src.models.fusion import loggable_fusion
@@ -516,8 +516,23 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
     ckpt_dir = Path(cfg.paths.checkpoint_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    best_val = float("inf")
-    patience_left = int(cfg.train.patience)
+    model_train_cfg = (
+        cfg.model.get("train", {})
+        if "model" in cfg and isinstance(cfg.model.get("train"), (dict, DictConfig))
+        else {}
+    )
+    val_metric_name = str(cfg.train.get("val_metric", "mse")).lower()
+    if val_metric_name == "mse" and "val_metric" in model_train_cfg:
+        val_metric_name = str(model_train_cfg["val_metric"]).lower()
+
+    patience = int(cfg.train.get("patience", 5))
+    if patience == 5 and "patience" in model_train_cfg:
+        patience = int(model_train_cfg["patience"])
+
+    is_maximize = val_metric_name in ("macro_f1", "f1", "da", "accuracy")
+    best_val = float("-inf") if is_maximize else float("inf")
+    patience_left = int(patience)
+
     loss_cfg = cfg.model.get("loss", {})
     lambda_c = float(loss_cfg.get("lambda_c", 0.0))
     lambda_e = float(loss_cfg.get("lambda_e", 0.0))
@@ -547,6 +562,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             mlflow.log_param("target_mode", target_mode)
             mlflow.log_param("beta_scale", beta_scale)
             mlflow.log_param("lambda_cross", lambda_cross)
+            mlflow.log_param("val_metric", val_metric_name)
+            mlflow.log_param("patience", patience)
             if n_backbone_g12 is not None:
                 mlflow.log_param("n_params_backbone_g12", n_backbone_g12)
             fusion_cfg = cfg.model.get("fusion")
@@ -762,10 +779,21 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     with torch.no_grad():
                         model.proto.prototypes.copy_(init_bank.to(device)[idx])
                     log.info("Projected prototypes onto bank at epoch %d", epoch)
-                if val_metrics["mse"] < best_val:
-                    best_val = val_metrics["mse"]
-                    patience_left = int(cfg.train.patience)
+                if val_metric_name in ("winkler", "quantile_winkler"):
+                    current_val = float(val_metrics.get("winkler", val_metrics.get("quantile_winkler", val_metrics["mse"])))
+                elif val_metric_name in ("pinball", "val_loss"):
+                    current_val = float(val_metrics.get("pinball", val_metrics.get("val_loss", avg_loss)))
+                elif val_metric_name in ("macro_f1", "f1"):
+                    current_val = float(val_metrics.get("macro_f1", 0.0))
+                else:  # "mse"
+                    current_val = float(val_metrics["mse"])
+
+                is_better = (current_val > best_val) if is_maximize else (current_val < best_val)
+                if is_better:
+                    best_val = current_val
+                    patience_left = int(patience)
                     torch.save(model.state_dict(), ckpt_dir / "best.pt")
+                    log.info("Best checkpoint updated by %s: %.6f at epoch %d", val_metric_name, current_val, epoch)
                 else:
                     patience_left -= 1
                     if patience_left <= 0:
@@ -777,6 +805,17 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True))
 
         test_metrics = evaluate(model, test_loader, device, target_mode=target_mode)
+        naive_metrics: dict[str, float] = {}
+        if "quantile_coverage" in test_metrics or val_metric_name in ("winkler", "pinball"):
+            naive_metrics = compute_naive_historical_corridor_metrics(test_ds, horizon=int(cfg.data.horizon))
+            if "naive_winkler" in naive_metrics:
+                log.info(
+                    "Naive Historical Corridor (Baseline) — cov80=%.4f sharp=%.4f winkler=%.4f",
+                    naive_metrics["naive_coverage"],
+                    naive_metrics["naive_sharpness"],
+                    naive_metrics["naive_winkler"],
+                )
+
         da_test_str = f" da={test_metrics['da']:.4f}" if "da" in test_metrics else ""
         delta_str = ""
         if "delta_mse" in test_metrics:
@@ -784,15 +823,32 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         q_test_str = ""
         if "quantile_coverage" in test_metrics:
             q_test_str = f" cov80={test_metrics['quantile_coverage']:.4f} sharp={test_metrics['quantile_sharpness']:.4f} winkler={test_metrics['quantile_winkler']:.4f}"
-        log.info(
-            "Test — mse=%.4f mae=%.4f%s mae_denorm=%s%s%s",
-            test_metrics["mse"],
-            test_metrics["mae"],
-            da_test_str,
-            f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
-            delta_str,
-            q_test_str,
-        )
+            log.info(
+                "Test Distributional — cov80=%.4f sharp=%.4f winkler=%.4f (Naive Baseline: cov80=%.4f sharp=%.4f winkler=%.4f)",
+                test_metrics["quantile_coverage"],
+                test_metrics["quantile_sharpness"],
+                test_metrics["quantile_winkler"],
+                naive_metrics.get("naive_coverage", 0.0),
+                naive_metrics.get("naive_sharpness", 0.0),
+                naive_metrics.get("naive_winkler", 0.0),
+            )
+            log.info(
+                "Test Median Point — mse=%.4f mae=%.4f%s mae_denorm=%s%s",
+                test_metrics["mse"],
+                test_metrics["mae"],
+                da_test_str,
+                f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
+                delta_str,
+            )
+        else:
+            log.info(
+                "Test — mse=%.4f mae=%.4f%s mae_denorm=%s%s",
+                test_metrics["mse"],
+                test_metrics["mae"],
+                da_test_str,
+                f"{test_metrics['mae_denorm']:.4f}" if "mae_denorm" in test_metrics else "n/a",
+                delta_str,
+            )
         log.info(
             "METRICS_ROW model=%s horizon=%s mse=%.4f mae=%.4f%s mae_denorm=%s%s%s",
             cfg.model.name,
@@ -817,6 +873,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             "model": str(cfg.model.name),
             "horizon": int(cfg.data.horizon),
             "seed": int(cfg.train.seed),
+            "val_metric": val_metric_name,
             "normalize": str(cfg.data.get("normalize")),
             "target_mode": target_mode,
             "mse": test_metrics["mse"],
@@ -831,6 +888,9 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         ):
             if k in test_metrics:
                 metrics_dict[k] = test_metrics[k]
+        for k in ("naive_coverage", "naive_sharpness", "naive_winkler"):
+            if k in naive_metrics:
+                metrics_dict[k] = naive_metrics[k]
         metrics_path.write_text(
             json.dumps(metrics_dict, indent=2),
             encoding="utf-8",
@@ -847,6 +907,9 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             ):
                 if k in test_metrics:
                     test_log[k] = test_metrics[k]
+            for k in ("naive_coverage", "naive_sharpness", "naive_winkler"):
+                if k in naive_metrics:
+                    test_log[f"test_{k}"] = naive_metrics[k]
             mlflow.log_metrics(test_log)
             mlflow.log_artifact(str(metrics_path))
 

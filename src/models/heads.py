@@ -78,8 +78,10 @@ class QuantileHead(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Projects token sequence [B, N_tokens, d_model] -> [B, horizon, K]."""
-        out = self.net(x)
-        return out.view(x.size(0), self.horizon, self.n_quantiles)
+        out = self.net(x).view(x.size(0), self.horizon, self.n_quantiles)
+        # Гарантия монотонности q_0.10 <= q_0.50 <= q_0.90 вдоль последнего измерения
+        out, _ = torch.sort(out, dim=-1)
+        return out
 
 
 class LinearHead(nn.Module):
