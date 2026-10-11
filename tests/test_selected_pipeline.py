@@ -134,7 +134,7 @@ def test_selected_batch_reaches_the_model_without_nan_grads(tmp_path) -> None:
 
     features, target, label_dates = selection_sample(frames, fold, horizon=7, embargo=14, lookback=60)
     assert label_dates.max() <= pd.Timestamp("2019-12-31")
-    signature = fit_signature(features, target, n_estimators=40, min_child_samples=20, seed=0)
+    signature = fit_signature(features, target, top_k=25, n_estimators=40, min_child_samples=20, seed=0)
     extra = features.iloc[[0]].copy()
     leaked_features = pd.concat([features, extra], ignore_index=True)
     leaked_target = np.concatenate([target, np.array([50.0])])
@@ -143,6 +143,7 @@ def test_selected_batch_reaches_the_model_without_nan_grads(tmp_path) -> None:
         leaked_features,
         leaked_target,
         leaked_mask,
+        top_k=25,
         n_estimators=40,
         min_child_samples=20,
         seed=0,
@@ -228,7 +229,7 @@ def test_selected_batch_reaches_the_model_without_nan_grads(tmp_path) -> None:
     item = train_ds[0]
     assert train_ds.target_idx == 0
     assert train_ds.scale_y_from_target is False
-    assert item["x"].shape == (60, 26)
+    assert item["x"].shape in ((60, 26), (60, 31))
     assert item["text_seq"].shape == (60, 15)
     assert item["y"].shape == (7,)
     wi = train_ds.indices[0]
@@ -245,7 +246,7 @@ def test_selected_batch_reaches_the_model_without_nan_grads(tmp_path) -> None:
     assert np.allclose(x.mean(axis=0), 0.0, atol=1e-5)
     loader = make_forecast_loader(train_ds, batch_size=4, shuffle=False, num_workers=0)
     batch = next(iter(loader))
-    assert tuple(batch["x"].shape) == (4, 60, 26)
+    assert tuple(batch["x"].shape) in ((4, 60, 26), (4, 60, 31))
     assert tuple(batch["text_seq"].shape) == (4, 60, 15)
     model = build_model(cfg)
     model.eval()

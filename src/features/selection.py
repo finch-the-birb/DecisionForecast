@@ -39,6 +39,7 @@ class FoldFeatureSignature:
     text_columns: tuple[str, ...]
     importances: pd.Series
     n_train_rows: int
+    selection_objective: str = "huber"
 
     def __post_init__(self) -> None:
         importances = pd.Series(self.importances).astype(np.float64).copy()
@@ -46,6 +47,7 @@ class FoldFeatureSignature:
         object.__setattr__(self, "text_columns", tuple(self.text_columns))
         object.__setattr__(self, "importances", importances)
         object.__setattr__(self, "n_train_rows", int(self.n_train_rows))
+        object.__setattr__(self, "selection_objective", str(self.selection_objective))
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -66,8 +68,14 @@ def select_fold_features(
     num_leaves: int = 31,
     min_child_samples: int = 20,
     seed: int = 0,
+    selection_objective: str = "huber",
 ) -> FoldFeatureSignature:
     """Fit on the train split and freeze the fold's technical-plus-text names."""
+    norm_obj = str(selection_objective).strip().lower()
+    if norm_obj not in ("huber", "volatility", "quantile"):
+        raise ValueError(
+            f"unknown selection_objective '{selection_objective}'; expected 'huber', 'volatility', or 'quantile'"
+        )
     if top_k < 1:
         raise ValueError("top_k must be >= 1")
     if not 0.0 < corr_threshold <= 1.0:
@@ -99,26 +107,89 @@ def select_fold_features(
         raise ValueError("need at least 2 finite train rows")
     train_x = pd.DataFrame(values[usable], columns=ts_names)
     train_y = y[usable]
-    model = _make_regressor(
-        huber_delta=huber_delta,
-        n_estimators=n_estimators,
-        learning_rate=learning_rate,
-        num_leaves=num_leaves,
-        min_child_samples=min_child_samples,
-        seed=seed,
-    )
-    model.fit(train_x, train_y)
-    contributions = np.asarray(model.predict(train_x, pred_contrib=True), dtype=np.float64)
-    if contributions.shape != (len(train_x), len(ts_names) + 1):
-        raise RuntimeError(
-            f"TreeSHAP shape {contributions.shape} does not match "
-            f"[{len(train_x)}, {len(ts_names) + 1}]"
+
+    if norm_obj == "volatility":
+        # Fit on absolute log returns |r_{t, t+H}|
+        model = _make_regressor(
+            objective="huber",
+            alpha=huber_delta,
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            num_leaves=num_leaves,
+            min_child_samples=min_child_samples,
+            seed=seed,
         )
-    importances = pd.Series(
-        np.abs(contributions[:, :-1]).mean(axis=0),
-        index=ts_names,
-        dtype=np.float64,
-    )
+        model.fit(train_x, np.abs(train_y))
+        contributions = np.asarray(model.predict(train_x, pred_contrib=True), dtype=np.float64)
+        if contributions.shape != (len(train_x), len(ts_names) + 1):
+            raise RuntimeError(
+                f"TreeSHAP shape {contributions.shape} does not match "
+                f"[{len(train_x)}, {len(ts_names) + 1}]"
+            )
+        importances = pd.Series(
+            np.abs(contributions[:, :-1]).mean(axis=0),
+            index=ts_names,
+            dtype=np.float64,
+        )
+    elif norm_obj == "quantile":
+        # Fit two models for quantiles 0.10 and 0.90, average mean absolute TreeSHAP
+        model_q10 = _make_regressor(
+            objective="quantile",
+            alpha=0.10,
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            num_leaves=num_leaves,
+            min_child_samples=min_child_samples,
+            seed=seed,
+        )
+        model_q10.fit(train_x, train_y)
+        contrib_q10 = np.asarray(model_q10.predict(train_x, pred_contrib=True), dtype=np.float64)
+
+        model_q90 = _make_regressor(
+            objective="quantile",
+            alpha=0.90,
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            num_leaves=num_leaves,
+            min_child_samples=min_child_samples,
+            seed=seed,
+        )
+        model_q90.fit(train_x, train_y)
+        contrib_q90 = np.asarray(model_q90.predict(train_x, pred_contrib=True), dtype=np.float64)
+
+        if contrib_q10.shape != (len(train_x), len(ts_names) + 1) or contrib_q90.shape != (len(train_x), len(ts_names) + 1):
+            raise RuntimeError("TreeSHAP shape does not match expected dimensions")
+
+        phi_10 = np.abs(contrib_q10[:, :-1]).mean(axis=0)
+        phi_90 = np.abs(contrib_q90[:, :-1]).mean(axis=0)
+        importances = pd.Series(
+            0.5 * (phi_10 + phi_90),
+            index=ts_names,
+            dtype=np.float64,
+        )
+    else:  # "huber"
+        model = _make_regressor(
+            objective="huber",
+            alpha=huber_delta,
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            num_leaves=num_leaves,
+            min_child_samples=min_child_samples,
+            seed=seed,
+        )
+        model.fit(train_x, train_y)
+        contributions = np.asarray(model.predict(train_x, pred_contrib=True), dtype=np.float64)
+        if contributions.shape != (len(train_x), len(ts_names) + 1):
+            raise RuntimeError(
+                f"TreeSHAP shape {contributions.shape} does not match "
+                f"[{len(train_x)}, {len(ts_names) + 1}]"
+            )
+        importances = pd.Series(
+            np.abs(contributions[:, :-1]).mean(axis=0),
+            index=ts_names,
+            dtype=np.float64,
+        )
+
     corr = spearman_corr(train_x)
     selected = decorrelated_top_k(importances, corr, top_k, corr_threshold)
     if LEVEL_COLUMN in selected:
@@ -133,6 +204,7 @@ def select_fold_features(
         text_columns=text_names,
         importances=importances.sort_values(ascending=False, kind="mergesort"),
         n_train_rows=int(usable.sum()),
+        selection_objective=norm_obj,
     )
 
 
@@ -188,16 +260,19 @@ def spearman_corr(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _make_regressor(
     *,
-    huber_delta: float,
+    objective: str = "huber",
+    alpha: float | None = None,
+    huber_delta: float | None = None,
     n_estimators: int,
     learning_rate: float,
     num_leaves: int,
     min_child_samples: int,
     seed: int,
 ) -> lgb.LGBMRegressor:
+    effective_alpha = alpha if alpha is not None else (huber_delta if huber_delta is not None else HUBER_DELTA)
     return lgb.LGBMRegressor(
-        objective="huber",
-        alpha=float(huber_delta),
+        objective=objective,
+        alpha=float(effective_alpha),
         n_estimators=int(n_estimators),
         learning_rate=float(learning_rate),
         num_leaves=int(num_leaves),

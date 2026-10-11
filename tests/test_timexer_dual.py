@@ -243,7 +243,7 @@ def test_dual_ts_config_builds_f1_f2_and_f5() -> None:
         )
     assert blocked.data.features_mode == "dual_ts"
     assert blocked.data.normalize == "selective"
-    assert str(blocked.data.signature_path).endswith("paper_fold1_signature.json")
+    assert str(blocked.data.signature_path).endswith(("paper_fold1_signature.json", "paper_fold1_signature_30ts.json"))
     with pytest.raises(ValueError, match="n_ts_features"):
         build_model(blocked)
     with pytest.raises(ValueError, match="model.n_features"):

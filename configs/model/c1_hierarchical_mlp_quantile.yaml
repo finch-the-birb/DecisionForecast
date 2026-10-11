@@ -5,7 +5,7 @@ variant: timexer_hierarchical_mlp
 target_mode: delta
 
 train:
-  val_metric: winkler   # Оптимизация чекпоинта по качеству доверительного интервала
+  val_metric: pinball   # Оптимизация чекпоинта по multi-quantile pinball loss
   patience: 7
 
 fusion:

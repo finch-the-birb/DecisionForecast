@@ -217,6 +217,7 @@ def fit_signature(
     n_estimators: int = 200,
     min_child_samples: int = 20,
     seed: int = 0,
+    selection_objective: str = "huber",
 ) -> FoldFeatureSignature:
     mask = np.ones(len(features), dtype=bool)
     return select_fold_features(
@@ -227,12 +228,14 @@ def fit_signature(
         n_estimators=n_estimators,
         min_child_samples=min_child_samples,
         seed=seed,
+        selection_objective=selection_objective,
     )
 
 
 def write_signature(path: Path, signature: FoldFeatureSignature, meta: dict) -> None:
     payload = {
         "format": SIGNATURE_FORMAT,
+        "selection_objective": getattr(signature, "selection_objective", "huber"),
         **meta,
         "ts_columns": list(signature.ts_columns),
         "text_columns": list(signature.text_columns),
@@ -269,6 +272,7 @@ def read_signature(path: Path, *, horizon: int, lookback: int) -> dict:
         )
     payload["ts_columns"] = ts_columns
     payload["text_columns"] = text_columns
+    payload["selection_objective"] = payload.get("selection_objective", "huber")
     return payload
 
 

@@ -79,8 +79,8 @@ def _recursive_ema(values: np.ndarray, span: int) -> np.ndarray:
 def test_default_inventory_is_expanded_base_by_5_columns() -> None:
     n_windows = len(WINDOWS)
     n_becker = len(EII_WINDOWS) + 4 * n_windows
-    n_base = len(RETURN_LAGS) + 2 + 9 * n_windows + 1 + n_becker + 4
-    assert n_base == 96
+    n_base = len(RETURN_LAGS) + 2 + 9 * n_windows + 1 + n_becker + 4 + 10  # +10 causal FFT harmonics
+    assert n_base == 106
     assert len(base_feature_names()) == n_base
     names = technical_feature_names()
     assert len(names) == n_base * 5

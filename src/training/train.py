@@ -563,6 +563,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             mlflow.log_param("beta_scale", beta_scale)
             mlflow.log_param("lambda_cross", lambda_cross)
             mlflow.log_param("val_metric", val_metric_name)
+            if val_metric_name in ("winkler_da_pareto", "pareto"):
+                mlflow.log_param("da_threshold", float(cfg.train.get("da_threshold", model_train_cfg.get("da_threshold", 0.53))))
             mlflow.log_param("patience", patience)
             if n_backbone_g12 is not None:
                 mlflow.log_param("n_params_backbone_g12", n_backbone_g12)
@@ -720,6 +722,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 q_val_str = ""
                 if "quantile_coverage" in val_metrics:
                     q_val_str = f" cov80={val_metrics['quantile_coverage']:.4f} sharp={val_metrics['quantile_sharpness']:.4f} winkler={val_metrics['quantile_winkler']:.4f}"
+                    if "pinball" in val_metrics:
+                        q_val_str += f" pinball={val_metrics['pinball']:.4f}"
                 log.info(
                     "Epoch %d — train_loss=%.4f l_pred=%.4f l_scale=%.4f l_cross=%.4f l_c=%.4f l_e=%.4f l_d=%.4f "
                     "val_mse=%.4f val_mae=%.4f%s%s proto_nn_dist_mean=%s proto_min_pairwise_dist=%s",
@@ -757,9 +761,14 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                         row["val_da"] = val_metrics["da"]
                     if "mae_denorm" in val_metrics:
                         row["val_mae_denorm"] = val_metrics["mae_denorm"]
+                    if val_metric_name in ("winkler_da_pareto", "pareto"):
+                        val_winkler = float(val_metrics.get("winkler", val_metrics.get("quantile_winkler", val_metrics["mse"])))
+                        val_da = float(val_metrics.get("da", val_metrics.get("delta_da", val_metrics.get("test_da", 0.5))))
+                        da_thresh = float(cfg.train.get("da_threshold", model_train_cfg.get("da_threshold", 0.53)))
+                        row["val_winkler_da_pareto"] = val_winkler + (da_thresh - val_da) * 1.0 if val_da < da_thresh else val_winkler
                     for k in (
                         "delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm",
-                        "quantile_coverage", "quantile_sharpness", "quantile_winkler"
+                        "quantile_coverage", "quantile_sharpness", "quantile_winkler", "pinball", "quantile_pinball"
                     ):
                         if k in val_metrics:
                             row[f"val_{k}"] = val_metrics[k]
@@ -781,6 +790,14 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                     log.info("Projected prototypes onto bank at epoch %d", epoch)
                 if val_metric_name in ("winkler", "quantile_winkler"):
                     current_val = float(val_metrics.get("winkler", val_metrics.get("quantile_winkler", val_metrics["mse"])))
+                elif val_metric_name in ("winkler_da_pareto", "pareto"):
+                    val_winkler = float(val_metrics.get("winkler", val_metrics.get("quantile_winkler", val_metrics["mse"])))
+                    val_da = float(val_metrics.get("da", val_metrics.get("delta_da", val_metrics.get("test_da", 0.5))))
+                    da_threshold = float(cfg.train.get("da_threshold", model_train_cfg.get("da_threshold", 0.53)))
+                    if val_da < da_threshold:
+                        current_val = val_winkler + (da_threshold - val_da) * 1.0
+                    else:
+                        current_val = val_winkler
                 elif val_metric_name in ("pinball", "val_loss"):
                     current_val = float(val_metrics.get("pinball", val_metrics.get("val_loss", avg_loss)))
                 elif val_metric_name in ("macro_f1", "f1"):
@@ -806,7 +823,7 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
 
         test_metrics = evaluate(model, test_loader, device, target_mode=target_mode)
         naive_metrics: dict[str, float] = {}
-        if "quantile_coverage" in test_metrics or val_metric_name in ("winkler", "pinball"):
+        if "quantile_coverage" in test_metrics or val_metric_name in ("winkler", "pinball", "winkler_da_pareto", "pareto"):
             naive_metrics = compute_naive_historical_corridor_metrics(test_ds, horizon=int(cfg.data.horizon))
             if "naive_winkler" in naive_metrics:
                 log.info(

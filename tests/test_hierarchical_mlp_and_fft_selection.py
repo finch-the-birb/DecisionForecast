@@ -49,18 +49,19 @@ def test_timexer_hierarchical_mlp_initialization_and_forward() -> None:
     )
 
     # Verify head architecture: Flatten -> Linear -> GELU -> Dropout -> Linear
-    assert isinstance(model.head, nn.Sequential)
-    assert len(model.head) == 5
-    assert isinstance(model.head[0], nn.Flatten)
-    assert isinstance(model.head[1], nn.Linear)
-    assert model.head[1].in_features == model.head_nf
-    assert model.head[1].out_features == 128
-    assert isinstance(model.head[2], nn.GELU)
-    assert isinstance(model.head[3], nn.Dropout)
-    assert model.head[3].p == 0.1
-    assert isinstance(model.head[4], nn.Linear)
-    assert model.head[4].in_features == 128
-    assert model.head[4].out_features == 7
+    head_net = model.head.net if hasattr(model.head, "net") else model.head
+    assert isinstance(head_net, nn.Sequential)
+    assert len(head_net) == 5
+    assert isinstance(head_net[0], nn.Flatten)
+    assert isinstance(head_net[1], nn.Linear)
+    assert head_net[1].in_features == model.head_nf
+    assert head_net[1].out_features == 128
+    assert isinstance(head_net[2], nn.GELU)
+    assert isinstance(head_net[3], nn.Dropout)
+    assert head_net[3].p == 0.1
+    assert isinstance(head_net[4], nn.Linear)
+    assert head_net[4].in_features == 128
+    assert head_net[4].out_features == 7
 
     assert model.n_ts_features == 30
     assert model.fft_mode == "bridge"
@@ -207,8 +208,9 @@ def test_hydra_build_model_all_5_delta_configs() -> None:
             model = build_model(cfg)
             assert isinstance(model, TimeXerHierarchicalMLP)
             assert model.n_ts_features == 30
-            assert isinstance(model.head, nn.Sequential)
-            assert len(model.head) == 5
+            head_net = model.head.net if hasattr(model.head, "net") else model.head
+            assert isinstance(head_net, nn.Sequential)
+            assert len(head_net) == 5
 
 
 def test_mini_smoke_run_hierarchical_mlp_delta(tmp_path: Path) -> None:

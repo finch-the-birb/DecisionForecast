@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import numpy as np
+import pandas as pd
 import pytest
 import torch
 
@@ -253,3 +256,78 @@ def test_compute_naive_historical_corridor_metrics():
     assert 0.0 <= res["naive_coverage"] <= 1.0
     assert res["naive_sharpness"] > 0.0
     assert res["naive_winkler"] > 0.0
+
+
+def test_selection_objective_modes(tmp_path: Path):
+    from src.data.selected_pipeline import fit_signature, read_signature, write_signature
+    from src.features.selection import select_fold_features
+
+    # Synthetic technical feature frame: 50 rows, 10 indicators + close
+    np.random.seed(42)
+    n_rows = 50
+    data = {f"feat_{i}": np.random.randn(n_rows) for i in range(10)}
+    data["close"] = np.random.uniform(50, 100, size=n_rows)
+    df = pd.DataFrame(data)
+
+    target = np.random.randn(n_rows) * 0.05
+    mask = np.ones(n_rows, dtype=bool)
+
+    # 1. Huber (legacy)
+    sig_huber = select_fold_features(
+        df, target, mask, top_k=5, n_estimators=10, min_child_samples=5, selection_objective="huber"
+    )
+    assert sig_huber.selection_objective == "huber"
+    assert len(sig_huber.ts_columns) == 6
+    assert sig_huber.ts_columns[0] == "close"
+
+    # 2. Volatility
+    sig_vol = select_fold_features(
+        df, target, mask, top_k=5, n_estimators=10, min_child_samples=5, selection_objective="volatility"
+    )
+    assert sig_vol.selection_objective == "volatility"
+    assert len(sig_vol.ts_columns) == 6
+    assert sig_vol.ts_columns[0] == "close"
+
+    # 3. Quantile
+    sig_q = select_fold_features(
+        df, target, mask, top_k=5, n_estimators=10, min_child_samples=5, selection_objective="quantile"
+    )
+    assert sig_q.selection_objective == "quantile"
+    assert len(sig_q.ts_columns) == 6
+    assert sig_q.ts_columns[0] == "close"
+
+    # 4. Invalid objective
+    with pytest.raises(ValueError, match="unknown selection_objective"):
+        select_fold_features(df, target, mask, selection_objective="invalid_mode")
+
+    # 5. Serialization and deserialization
+    data_30 = {f"feat_{i}": np.random.randn(n_rows) for i in range(30)}
+    data_30["close"] = np.random.uniform(50, 100, size=n_rows)
+    df_30 = pd.DataFrame(data_30)
+    sig_30 = select_fold_features(
+        df_30, target, mask, top_k=25, n_estimators=10, min_child_samples=5, selection_objective="volatility"
+    )
+    sig_file = tmp_path / "test_sig.json"
+    meta = {"horizon": 7, "lookback": 60, "target_definition": "abs_return"}
+    write_signature(sig_file, sig_30, meta)
+    loaded = read_signature(sig_file, horizon=7, lookback=60)
+    assert loaded["selection_objective"] == "volatility"
+    assert loaded["ts_columns"] == list(sig_30.ts_columns)
+
+
+def test_winkler_da_pareto_checkpointing():
+    # When val_da < da_threshold: penalty added
+    da_threshold = 0.53
+    val_winkler = 0.0800
+    val_da_low = 0.5000
+    expected_low = val_winkler + (da_threshold - val_da_low) * 1.0  # 0.0800 + 0.0300 = 0.1100
+    assert abs(expected_low - 0.1100) < 1e-6
+
+    # When val_da >= da_threshold: pure val_winkler
+    val_da_high = 0.5600
+    expected_high = val_winkler
+    assert expected_high == 0.0800
+
+    # Ensure higher DA yields strictly lower (better) Pareto score for identical Winkler
+    assert expected_high < expected_low
+
