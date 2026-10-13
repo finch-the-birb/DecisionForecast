@@ -388,7 +388,8 @@ def evaluate(
     device: torch.device,
     close_idx: int = 0,
     target_mode: str = "level",
-) -> dict[str, float]:
+    return_tensors: bool = False,
+) -> dict[str, float] | tuple[dict[str, float], torch.Tensor, torch.Tensor]:
     model.eval()
     preds: list[torch.Tensor] = []
     targets: list[torch.Tensor] = []
@@ -425,7 +426,7 @@ def evaluate(
         if ds is not None and getattr(ds, "target_mode", "level") == "delta":
             target_mode = "delta"
 
-    return compute_metrics(
+    metrics = compute_metrics(
         pred=pred_cat,
         target=tgt_cat,
         y_mean=y_mean_cat,
@@ -435,6 +436,9 @@ def evaluate(
         last_raw_close=last_raw_close_cat,
         raw_target_price=raw_target_price_cat,
     )
+    if return_tensors:
+        return metrics, pred_cat, tgt_cat
+    return metrics
 
 
 def run_training(cfg: DictConfig) -> dict[str, float]:
@@ -821,7 +825,33 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
         if best_path.exists():
             model.load_state_dict(torch.load(best_path, map_location=device, weights_only=True))
 
-        test_metrics = evaluate(model, test_loader, device, target_mode=target_mode)
+        test_metrics, test_preds, test_targets = evaluate(
+            model, test_loader, device, target_mode=target_mode, return_tensors=True
+        )
+        torch.save(
+            {"preds": test_preds, "targets": test_targets},
+            Path(cfg.paths.output_dir) / "test_predictions.pt",
+        )
+        if test_preds.dim() == 3 and test_preds.shape[-1] == 3:
+            from src.evaluation.conformal import apply_adaptive_conformal_inference
+
+            aci_res = apply_adaptive_conformal_inference(
+                test_preds, test_targets, alpha=0.20, gamma=0.005
+            )
+            log.info(
+                "Test ACI Conformal (gamma=0.005) — cov80=%.4f sharp=%.4f winkler=%.4f",
+                aci_res["coverage"],
+                aci_res["sharpness"],
+                aci_res["winkler"],
+            )
+            test_metrics["aci_coverage"] = aci_res["coverage"]
+            test_metrics["aci_sharpness"] = aci_res["sharpness"]
+            test_metrics["aci_winkler"] = aci_res["winkler"]
+            torch.save(
+                aci_res["calibrated_preds"],
+                Path(cfg.paths.output_dir) / "calibrated_predictions.pt",
+            )
+
         naive_metrics: dict[str, float] = {}
         if "quantile_coverage" in test_metrics or val_metric_name in ("winkler", "pinball", "winkler_da_pareto", "pareto"):
             naive_metrics = compute_naive_historical_corridor_metrics(test_ds, horizon=int(cfg.data.horizon))
@@ -901,7 +931,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
             metrics_dict["da"] = test_metrics["da"]
         for k in (
             "delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm",
-            "quantile_coverage", "quantile_sharpness", "quantile_winkler"
+            "quantile_coverage", "quantile_sharpness", "quantile_winkler",
+            "aci_coverage", "aci_sharpness", "aci_winkler",
         ):
             if k in test_metrics:
                 metrics_dict[k] = test_metrics[k]
@@ -920,7 +951,8 @@ def run_training(cfg: DictConfig) -> dict[str, float]:
                 test_log["test_mae_denorm"] = test_metrics["mae_denorm"]
             for k in (
                 "delta_mse", "delta_mae", "delta_da", "test_mse_price", "test_da", "test_mae_denorm",
-                "quantile_coverage", "quantile_sharpness", "quantile_winkler"
+                "quantile_coverage", "quantile_sharpness", "quantile_winkler",
+                "aci_coverage", "aci_sharpness", "aci_winkler",
             ):
                 if k in test_metrics:
                     test_log[k] = test_metrics[k]
