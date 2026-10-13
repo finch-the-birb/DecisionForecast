@@ -60,17 +60,25 @@
 
 ## 3. Графики инференса коридоров
 
-Для визуального сопоставления построены многоуровневые графики сравнения 80% квантильных коридоров (GARCH vs TimeXer Raw vs TimeXer ACI) для 3 репрезентативных тикеров:
-- **`AAPL`** — Big Tech / Core Equity
-- **`NVDA`** — High Volatility / AI Rally Leader
-- **`JPM`** — Financial Sector / Чувствительность к процентным ставкам
+Для наглядного сопоставления поведения доверительных тоннелей создана отдельная директория с графиками, отслеживаемая в Git-репозитории:
+📁 **[`plots/walkforward_garch_aci/`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/)**
 
-Графики сохранены в директории `agent-handoff/2026-10-14_1200_walkforward-folds-and-garch-baseline/figures/`:
-1. `corridor_comparison_overview_fold3.png` — Сводное сопоставление коридоров GARCH vs TimeXer ACI по трем тикерам (2023 год).
-2. `corridor_comparison_aapl_fold3.png` — Детальное 3-панельное сопоставление (GARCH / Raw / ACI) для Apple Inc.
-3. `corridor_comparison_nvda_fold3.png` — Детальное сопоставление для Nvidia Corp.
-4. `corridor_comparison_jpm_fold3.png` — Детальное сопоставление для JPMorgan Chase.
-5. `corridor_comparison_overview_fold2.png` — Сводное сопоставление на медвежьем рынке 2022 года.
+Графика структурирована по подпапкам соответствующих экспериментов и фолдов:
+- 📂 **[`fold1_bull_market_2021/`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold1_bull_market_2021/)** — Бычий рынок 2021 года (H2):
+  - [`corridor_comparison_overview_fold1.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold1_bull_market_2021/corridor_comparison_overview_fold1.png) — Мультитикерное сопоставление (AAPL, NVDA, JPM)
+  - [`corridor_comparison_aapl_fold1.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold1_bull_market_2021/corridor_comparison_aapl_fold1.png) — 3-панельное сравнение (GARCH vs Raw vs ACI)
+  - [`corridor_comparison_nvda_fold1.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold1_bull_market_2021/corridor_comparison_nvda_fold1.png) — 3-панельное сравнение
+  - [`corridor_comparison_jpm_fold1.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold1_bull_market_2021/corridor_comparison_jpm_fold1.png) — 3-панельное сравнение
+- 📂 **[`fold2_bear_market_2022/`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold2_bear_market_2022/)** — Медвежий рынок 2022 года (H2, цикл роста процентных ставок):
+  - [`corridor_comparison_overview_fold2.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold2_bear_market_2022/corridor_comparison_overview_fold2.png) — Мультитикерное сопоставление
+  - [`corridor_comparison_aapl_fold2.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold2_bear_market_2022/corridor_comparison_aapl_fold2.png) — 3-панельное сравнение
+  - [`corridor_comparison_nvda_fold2.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold2_bear_market_2022/corridor_comparison_nvda_fold2.png) — 3-панельное сравнение
+  - [`corridor_comparison_jpm_fold2.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold2_bear_market_2022/corridor_comparison_jpm_fold2.png) — 3-панельное сравнение
+- 📂 **[`fold3_recovery_2023/`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold3_recovery_2023/)** — Восстановление и технологический бум 2023 года (H2):
+  - [`corridor_comparison_overview_fold3.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold3_recovery_2023/corridor_comparison_overview_fold3.png) — Мультитикерное сопоставление
+  - [`corridor_comparison_aapl_fold3.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold3_recovery_2023/corridor_comparison_aapl_fold3.png) — 3-панельное сравнение
+  - [`corridor_comparison_nvda_fold3.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold3_recovery_2023/corridor_comparison_nvda_fold3.png) — 3-панельное сравнение
+  - [`corridor_comparison_jpm_fold3.png`](file:///workspace/DecisionForecast/plots/walkforward_garch_aci/fold3_recovery_2023/corridor_comparison_jpm_fold3.png) — 3-панельное сравнение
 
 ---
 
@@ -115,7 +123,9 @@ for f in 1 2 3; do
   done
 done
 
-# 4. Построение графиков
-uv run python scripts/generate_corridor_comparison_plots.py --fold 3 --run-dir outputs/2026-10-13/19-47-23
+# 4. Построение графиков (сохраняются в plots/walkforward_garch_aci/)
+uv run python scripts/generate_corridor_comparison_plots.py --fold 1 --run-dir outputs/2026-10-13/18-39-26
 uv run python scripts/generate_corridor_comparison_plots.py --fold 2 --run-dir outputs/2026-10-13/19-10-29
+uv run python scripts/generate_corridor_comparison_plots.py --fold 3 --run-dir outputs/2026-10-13/19-47-23
 ```
+

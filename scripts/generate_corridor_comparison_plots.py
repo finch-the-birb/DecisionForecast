@@ -268,12 +268,24 @@ def main():
     parser = argparse.ArgumentParser(description="Generate corridor comparison figures.")
     parser.add_argument("--fold", type=int, default=3)
     parser.add_argument("--run-dir", type=str, default="outputs/2026-10-13/19-47-23")
+    parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--stride", type=int, default=7)
     args = parser.parse_args()
+
+    fold_subdirs = {
+        1: "fold1_bull_market_2021",
+        2: "fold2_bear_market_2022",
+        3: "fold3_recovery_2023",
+    }
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+    else:
+        out_dir = Path("plots/walkforward_garch_aci") / fold_subdirs.get(args.fold, f"fold{args.fold}")
 
     generate_plots_for_fold(
         fold=args.fold,
         run_dir=Path(args.run_dir),
+        output_dir=out_dir,
         stride=args.stride,
     )
 
