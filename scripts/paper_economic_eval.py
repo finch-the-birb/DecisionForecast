@@ -298,13 +298,17 @@ def find_saved_run_dirs(fold: int, seed: int, base_dir: Path = Path("outputs")) 
             data_fold = int(cfg.get("data", {}).get("fold", 1))
             run_seed = int(cfg.get("train", {}).get("seed", 42))
             model_name = str(cfg.get("model", {}).get("name", ""))
+            max_train = cfg.get("train", {}).get("max_train_windows", None)
+            if max_train is not None:
+                continue
             if data_fold == fold and run_seed == seed and "c1_hierarchical_mlp_quantile" in model_name:
                 run_dir = cfg_path.parent
                 if (run_dir / "test_predictions.pt").exists():
-                    matched.append(run_dir)
+                    matched.append((cfg_path.stat().st_mtime, run_dir))
         except Exception:
             continue
-    return matched
+    matched.sort(key=lambda x: x[0], reverse=True)
+    return [m[1] for m in matched]
 
 
 def extract_or_generate_predictions(
