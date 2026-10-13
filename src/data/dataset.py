@@ -853,11 +853,39 @@ def build_datasets(
     horizon = int(cfg.data.horizon)
     features = list(cfg.data.features)
     target_col = str(cfg.data.target)
-    train_end = _as_naive_day(cfg.data.split.train_end)
-    val_end = _as_naive_day(cfg.data.split.val_end)
-    train_start = (
-        _as_naive_day(cfg.data.split.train_start) if cfg.data.split.get("train_start") else None
-    )
+    fold_cfg = cfg.data.get("fold", None)
+    if fold_cfg is not None and int(fold_cfg) in (1, 2, 3):
+        fold_id = int(fold_cfg)
+        from src.data.walk_forward import DEFAULT_FOLDS, EMBARGO_BARS
+
+        wf_fold = DEFAULT_FOLDS[fold_id - 1]
+        train_start = _as_naive_day(wf_fold.train_start)
+        train_end = _as_naive_day(wf_fold.train_end)
+        val_start = _as_naive_day(wf_fold.val_start)
+        val_end = _as_naive_day(wf_fold.val_end)
+        test_start = _as_naive_day(wf_fold.test_start)
+        test_end = _as_naive_day(wf_fold.test_end)
+        embargo = int(cfg.data.get("embargo", EMBARGO_BARS))
+    else:
+        train_end = _as_naive_day(cfg.data.split.train_end)
+        val_end = _as_naive_day(cfg.data.split.val_end)
+        train_start = (
+            _as_naive_day(cfg.data.split.train_start) if cfg.data.split.get("train_start") else None
+        )
+        val_start = (
+            _as_naive_day(cfg.data.split.val_start)
+            if cfg.data.split.get("val_start")
+            else train_end + pd.Timedelta(days=1)
+        )
+        test_start = (
+            _as_naive_day(cfg.data.split.test_start)
+            if cfg.data.split.get("test_start")
+            else val_end + pd.Timedelta(days=1)
+        )
+        test_end = (
+            _as_naive_day(cfg.data.split.test_end) if cfg.data.split.get("test_end") else None
+        )
+        embargo = int(cfg.data.get("embargo", 0))
     normalize = str(cfg.data.get("normalize", "per_ticker_zscore"))
     text_enabled = bool(cfg.data.text.get("enabled", True))
     text_dim = int(cfg.data.text.dim)
@@ -995,23 +1023,43 @@ def build_datasets(
 
     for ticker, ts in series.items():
         max_end = len(ts.features) - horizon
+        dates = pd.to_datetime(ts.dates).dt.tz_localize(None).dt.normalize()
+        val_pos = dates.searchsorted(val_start, side="left")
+        val_origin = int(val_pos) if val_pos < len(dates) else None
+        test_pos = dates.searchsorted(test_start, side="left")
+        test_origin = int(test_pos) if test_pos < len(dates) else None
+
         for end_idx in range(lookback, max_end):
-            last_target_date = _as_naive_day(ts.dates.iloc[end_idx + horizon - 1])
-            if last_target_date <= train_end:
-                bucket = train_idx
-            elif last_target_date <= val_end:
-                bucket = val_idx
-            else:
-                bucket = test_idx
-            end_date = _as_naive_day(ts.dates.iloc[end_idx])
-            bucket.append(
-                WindowIndex(
-                    ticker=ticker,
-                    end_idx=end_idx,
-                    start_idx=end_idx - lookback,
-                    end_date=str(end_date.date()),
+            first_feat_date = _as_naive_day(dates.iloc[end_idx - lookback])
+            first_target_date = _as_naive_day(dates.iloc[end_idx])
+            last_target_date = _as_naive_day(dates.iloc[end_idx + horizon - 1])
+
+            bucket = None
+            if train_start is None or first_feat_date >= train_start:
+                if last_target_date <= train_end:
+                    if val_origin is None or embargo == 0 or (end_idx <= val_origin - horizon - embargo):
+                        bucket = train_idx
+
+            if bucket is None:
+                if first_target_date >= val_start and last_target_date <= val_end:
+                    if test_origin is None or embargo == 0 or (end_idx <= test_origin - horizon - embargo):
+                        bucket = val_idx
+
+            if bucket is None:
+                if first_target_date >= test_start or (embargo == 0 and last_target_date > val_end):
+                    if test_end is None or last_target_date <= test_end:
+                        bucket = test_idx
+
+            if bucket is not None:
+                end_date = _as_naive_day(dates.iloc[end_idx])
+                bucket.append(
+                    WindowIndex(
+                        ticker=ticker,
+                        end_idx=end_idx,
+                        start_idx=end_idx - lookback,
+                        end_date=str(end_date.date()),
+                    )
                 )
-            )
 
     def _cap(items: list[WindowIndex], limit) -> list[WindowIndex]:
         return _cap_recent(items, limit)

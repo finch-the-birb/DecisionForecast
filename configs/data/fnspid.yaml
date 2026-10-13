@@ -17,10 +17,15 @@ target: close
 target_mode: level            # level (default LTSF RevIN) | delta (return forecasting)
 normalize: per_window          # per_window | per_ticker_zscore (legacy)
 
+fold: 3
+
 split:
   train_start: "2015-01-01"   # price rows < train_start dropped before windowing
   train_end: "2021-12-31"
+  val_start: "2022-01-01"
   val_end: "2022-12-31"
+  test_start: "2023-01-01"
+  test_end: "2023-12-31"
 
 tickers:
   dev:
