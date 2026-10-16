@@ -1,0 +1,27 @@
+# TimeXer without prototypes or text (Sprint 3 sanity).
+# OHLCV channels enter as multivariate PatchEmbed tokens (not exogenous).
+# One G_en; exo=None so encoder is purely endogenous self-attn.
+name: timexer_plain
+variant: timexer_plain
+use_prototypes: false
+
+d_model: 64
+n_heads: 4
+e_layers: 2            # override with model.e_layers=1
+d_ff: 256
+dropout: 0.1
+
+head:
+  pool: mean         # mean (default) | last | global | flatten
+  type: linear       # linear | mlp
+  hidden: 128
+  dropout: 0.1
+
+loss:
+  kind: mse           # mse | huber | directional | correlation | huber_directional
+  delta: 1.0          # for huber
+  gamma_dir: 0.1      # directional penalty weight
+  alpha_corr: 0.3     # correlation penalty weight
+  lambda_c: 0.0
+  lambda_e: 0.0
+  lambda_d: 0.0

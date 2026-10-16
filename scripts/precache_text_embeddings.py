@@ -33,6 +33,8 @@ def main() -> None:
     root = resolve_data_root(str(cfg.root))
     tickers = list(cfg.tickers[args.ticker_set])
     train_end = _as_naive_day(cfg.split.train_end)
+    train_start = _as_naive_day(cfg.split.train_start) if cfg.split.get("train_start") else None
+    normalize = str(cfg.get("normalize", "per_ticker_zscore"))
     text = cfg.text
     cache_root = root / "cache" / "text_series"
 
@@ -54,7 +56,12 @@ def main() -> None:
     loaded: list[str] = []
     for ticker in tickers:
         try:
-            series = store.get_series(ticker, train_end=train_end)
+            series = store.get_series(
+                ticker,
+                train_end=train_end,
+                train_start=train_start,
+                normalize=normalize,
+            )
         except (FileNotFoundError, KeyError, ValueError) as exc:
             log.warning("Skipping ticker %s: %s", ticker, exc)
             continue
@@ -62,7 +69,7 @@ def main() -> None:
         loaded.append(ticker)
 
     news_only = {t: news_by_ticker[t][0] for t in loaded}
-    mu_file = mu_path(cache_root, str(text.encoder), args.ticker_set)
+    mu_file = mu_path(cache_root, str(text.encoder), args.ticker_set, train_start, train_end)
     if mu_file.exists():
         mu = np.load(mu_file).astype(np.float32)
         log.info("mu cache hit %s", mu_file)
@@ -74,6 +81,7 @@ def main() -> None:
             train_end,
             str(text.article_field),
             str(text.article_fallback),
+            train_start=train_start,
         )
         mu_file.parent.mkdir(parents=True, exist_ok=True)
         np.save(mu_file, mu)

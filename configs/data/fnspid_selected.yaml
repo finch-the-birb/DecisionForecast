@@ -1,0 +1,16 @@
+# close is channel 0. TreeSHAP adds 25 indicators (26 series channels) and
+# compact text stays 15D. Names are read from the fold-1 signature when
+# datasets are built. Per-window RevIN scales y by channel 0.
+defaults:
+  - fnspid
+  - _self_
+
+name: fnspid_selected
+features_mode: selected_40d
+signature_path: ${data.root}/cache/selected_signatures/${train.ticker_set}_fold1_signature.json
+technical_cache_dir: ${data.root}/cache/technical
+text_compact_cache_dir: ${data.root}/cache/text_compact
+
+text:
+  dim: 15
+  compact: true

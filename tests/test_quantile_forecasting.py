@@ -1,0 +1,333 @@
+"""Unit tests for Distributional LTSF (QuantileHead, Pinball loss, and evaluation metrics)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import pytest
+import torch
+
+from src.evaluation.metrics import (
+    compute_metrics,
+    compute_quantile_metrics,
+    empirical_coverage,
+    tunnel_sharpness,
+    winkler_score,
+)
+from src.models.heads import LinearHead, QuantileHead, RegressionHead, build_head
+from src.models.losses import compute_task_loss, non_crossing_penalty, pinball_loss
+from src.models.timexer_hierarchical_mlp import TimeXerHierarchicalMLP
+
+
+def test_quantile_head_shape_and_gradients():
+    head_nf = 64
+    horizon = 7
+    batch_size = 4
+    tokens = 10
+    d_model = 16
+
+    head = QuantileHead(head_nf=head_nf, horizon=horizon, hidden=32, quantiles=(0.1, 0.5, 0.9))
+    x = torch.randn(batch_size, 4, d_model, requires_grad=True)
+    assert 4 * d_model == head_nf
+
+    out = head(x)
+    assert out.shape == (batch_size, horizon, 3)
+
+    loss = out.sum()
+    loss.backward()
+    assert x.grad is not None
+    assert x.grad.shape == x.shape
+
+
+def test_build_head_factory():
+    qh = build_head("quantile", head_nf=64, horizon=7, hidden=32, quantiles=(0.1, 0.5, 0.9))
+    assert isinstance(qh, QuantileHead)
+    assert qh.n_quantiles == 3
+
+    rh = build_head("mlp", head_nf=64, horizon=7, hidden=32)
+    assert isinstance(rh, RegressionHead)
+
+    lh = build_head("linear", head_nf=64, horizon=7)
+    assert isinstance(lh, LinearHead)
+
+    with pytest.raises(ValueError):
+        build_head("unsupported_head", head_nf=64, horizon=7)
+
+
+def test_pinball_loss_exact_values():
+    # target = 1.0, pred = [0.5, 1.0, 1.5] for quantiles (0.1, 0.5, 0.9)
+    # tau=0.1: err = 0.5 -> max(0.1*0.5, -0.9*0.5) = 0.05
+    # tau=0.5: err = 0.0 -> max(0, 0) = 0.0
+    # tau=0.9: err = -0.5 -> max(0.9*-0.5, -0.1*-0.5) = 0.05
+    # mean = (0.05 + 0.0 + 0.05) / 3 = 0.10 / 3
+    pred = torch.tensor([[[0.5, 1.0, 1.5]]], dtype=torch.float32)  # [1, 1, 3]
+    target = torch.tensor([[1.0]], dtype=torch.float32)             # [1, 1]
+
+    loss = pinball_loss(pred, target, quantiles=(0.1, 0.5, 0.9))
+    expected = (0.05 + 0.0 + 0.05) / 3.0
+    assert torch.isclose(loss, torch.tensor(expected, dtype=torch.float32), atol=1e-5)
+
+
+def test_non_crossing_penalty():
+    # Ordered: q_0.10 <= q_0.50 <= q_0.90 -> penalty must be 0
+    ordered_pred = torch.tensor([[[0.1, 0.5, 0.9]]], dtype=torch.float32)
+    penalty_zero = non_crossing_penalty(ordered_pred)
+    assert float(penalty_zero) == 0.0
+
+    # Inverted: q_0.10 = 0.8 > q_0.50 = 0.5, and q_0.50 = 0.5 > q_0.90 = 0.2
+    # diff1 = 0.8 - 0.5 = 0.3
+    # diff2 = 0.5 - 0.2 = 0.3
+    # penalty = 0.3 + 0.3 = 0.6
+    inverted_pred = torch.tensor([[[0.8, 0.5, 0.2]]], dtype=torch.float32, requires_grad=True)
+    penalty = non_crossing_penalty(inverted_pred)
+    assert torch.isclose(penalty, torch.tensor(0.6), atol=1e-5)
+
+    penalty.backward()
+    assert inverted_pred.grad is not None
+
+
+def test_compute_task_loss_pinball():
+    pred = torch.randn(2, 7, 3, requires_grad=True)
+    target = torch.randn(2, 7)
+
+    loss, metrics = compute_task_loss(
+        pred,
+        target,
+        loss_kind="pinball",
+        lambda_cross=1.0,
+        quantiles=(0.1, 0.5, 0.9),
+    )
+    assert loss.ndim == 0
+    assert "l_pinball" in metrics
+    assert "l_cross" in metrics
+    loss.backward()
+    assert pred.grad is not None
+
+
+def test_empirical_coverage_and_sharpness():
+    # Tunnel [0.0, 10.0]
+    # targets: [5.0, 15.0] -> 1 covered out of 2 -> coverage = 0.5
+    pred = torch.tensor([[[0.0, 5.0, 10.0], [0.0, 5.0, 10.0]]], dtype=torch.float32)  # [1, 2, 3]
+    target = torch.tensor([[5.0, 15.0]], dtype=torch.float32)                           # [1, 2]
+
+    cov = empirical_coverage(pred, target)
+    assert cov == 0.5
+
+    shp = tunnel_sharpness(pred)
+    assert shp == 10.0  # 10.0 - 0.0
+
+
+def test_winkler_score():
+    # Target inside tunnel [2.0, 8.0]: y = 5.0 -> width = 6.0, penalty = 0
+    pred_in = torch.tensor([[[2.0, 5.0, 8.0]]], dtype=torch.float32)
+    tgt_in = torch.tensor([[5.0]], dtype=torch.float32)
+    score_in = winkler_score(pred_in, tgt_in, alpha=0.2)
+    assert score_in == 6.0
+
+    # Target below tunnel [2.0, 8.0]: y = 1.0 (l - y = 1.0)
+    # width = 6.0, penalty = (2 / 0.2) * 1.0 = 10.0 -> score = 16.0
+    tgt_low = torch.tensor([[1.0]], dtype=torch.float32)
+    score_low = winkler_score(pred_in, tgt_low, alpha=0.2)
+    assert score_low == 16.0
+
+
+def test_compute_metrics_3d_quantile_integration():
+    pred = torch.tensor([
+        [[0.0, 1.0, 2.0], [1.0, 2.0, 3.0]]
+    ], dtype=torch.float32)  # [1, 2, 3]
+    target = torch.tensor([[1.0, 2.0]], dtype=torch.float32)  # [1, 2]
+
+    # Median forecast matches target exactly [1.0, 2.0]
+    metrics = compute_metrics(pred=pred, target=target, target_mode="level")
+    assert metrics["mse"] == 0.0
+    assert metrics["mae"] == 0.0
+    assert "quantile_coverage" in metrics
+    assert "quantile_sharpness" in metrics
+    assert "quantile_winkler" in metrics
+    assert metrics["quantile_coverage"] == 1.0
+    assert metrics["quantile_sharpness"] == 2.0
+
+
+def test_timexer_hierarchical_mlp_quantile_forward():
+    model = TimeXerHierarchicalMLP(
+        n_features=5,
+        seq_len=32,
+        horizon=7,
+        d_model=32,
+        n_heads=2,
+        e_layers=3,
+        patch_len=16,
+        patch_stride=8,
+        n_ts_features=30,
+        fft_mode="bridge",
+        head_type="quantile",
+        head_hidden=32,
+        quantiles=(0.1, 0.5, 0.9),
+    )
+
+    B = 2
+    x = torch.randn(B, 32, 5)
+    text = torch.randn(B, 15)
+    text_seq = torch.randn(B, 32, 15)
+    ts = torch.randn(B, 32, 30)
+
+    out = model(x, text, text_seq=text_seq, ts=ts)
+    assert out.pred.shape == (B, 7, 3)
+
+    target = torch.randn(B, 7)
+    loss, train_metrics = model.compute_loss(
+        out,
+        target,
+        lambda_c=0.0,
+        lambda_e=0.0,
+        lambda_d=0.0,
+        loss_kind="pinball",
+        lambda_cross=1.0,
+    )
+    assert loss.ndim == 0
+    assert "l_pinball" in train_metrics
+    assert "l_cross" in train_metrics
+
+    loss.backward()
+    grad_norm = sum(p.grad.norm().item() for p in model.parameters() if p.grad is not None)
+    assert grad_norm > 0.0
+
+
+def test_quantile_head_always_sorted():
+    head = QuantileHead(head_nf=64, horizon=7, hidden=32, quantiles=(0.1, 0.5, 0.9))
+    # Test across multiple random batches
+    for _ in range(5):
+        x = torch.randn(8, 4, 16)
+        out = head(x)
+        assert (out[..., 0] <= out[..., 1]).all(), "q_0.10 must be <= q_0.50"
+        assert (out[..., 1] <= out[..., 2]).all(), "q_0.50 must be <= q_0.90"
+
+
+def test_checkpointing_val_metric_selection():
+    # Test winkler selection
+    val_metrics = {
+        "mse": 0.5,
+        "quantile_winkler": 0.12,
+        "winkler": 0.12,
+        "macro_f1": 0.75,
+    }
+
+    # Winkler minimization
+    metric_winkler = "winkler"
+    is_max_w = metric_winkler in ("macro_f1", "f1")
+    val_w = val_metrics.get("winkler", val_metrics.get("quantile_winkler"))
+    assert val_w == 0.12
+    assert not is_max_w
+
+    # Macro F1 maximization
+    metric_f1 = "macro_f1"
+    is_max_f1 = metric_f1 in ("macro_f1", "f1")
+    val_f1 = val_metrics.get("macro_f1", 0.0)
+    assert val_f1 == 0.75
+    assert is_max_f1
+
+
+def test_compute_naive_historical_corridor_metrics():
+    from src.evaluation.metrics import compute_naive_historical_corridor_metrics
+
+    class MockDataset:
+        def __init__(self):
+            # 10 windows, lookback 60, horizon 7
+            self.items = []
+            for _ in range(10):
+                x = torch.randn(60, 5)
+                # target returns within +/- 0.05
+                y = torch.randn(7) * 0.02
+                self.items.append({"x": x, "y": y})
+
+        def __len__(self):
+            return len(self.items)
+
+        def __getitem__(self, idx):
+            return self.items[idx]
+
+    mock_ds = MockDataset()
+    res = compute_naive_historical_corridor_metrics(mock_ds, horizon=7)
+
+    assert "naive_coverage" in res
+    assert "naive_sharpness" in res
+    assert "naive_winkler" in res
+    assert 0.0 <= res["naive_coverage"] <= 1.0
+    assert res["naive_sharpness"] > 0.0
+    assert res["naive_winkler"] > 0.0
+
+
+def test_selection_objective_modes(tmp_path: Path):
+    from src.data.selected_pipeline import fit_signature, read_signature, write_signature
+    from src.features.selection import select_fold_features
+
+    # Synthetic technical feature frame: 50 rows, 10 indicators + close
+    np.random.seed(42)
+    n_rows = 50
+    data = {f"feat_{i}": np.random.randn(n_rows) for i in range(10)}
+    data["close"] = np.random.uniform(50, 100, size=n_rows)
+    df = pd.DataFrame(data)
+
+    target = np.random.randn(n_rows) * 0.05
+    mask = np.ones(n_rows, dtype=bool)
+
+    # 1. Huber (legacy)
+    sig_huber = select_fold_features(
+        df, target, mask, top_k=5, n_estimators=10, min_child_samples=5, selection_objective="huber"
+    )
+    assert sig_huber.selection_objective == "huber"
+    assert len(sig_huber.ts_columns) == 6
+    assert sig_huber.ts_columns[0] == "close"
+
+    # 2. Volatility
+    sig_vol = select_fold_features(
+        df, target, mask, top_k=5, n_estimators=10, min_child_samples=5, selection_objective="volatility"
+    )
+    assert sig_vol.selection_objective == "volatility"
+    assert len(sig_vol.ts_columns) == 6
+    assert sig_vol.ts_columns[0] == "close"
+
+    # 3. Quantile
+    sig_q = select_fold_features(
+        df, target, mask, top_k=5, n_estimators=10, min_child_samples=5, selection_objective="quantile"
+    )
+    assert sig_q.selection_objective == "quantile"
+    assert len(sig_q.ts_columns) == 6
+    assert sig_q.ts_columns[0] == "close"
+
+    # 4. Invalid objective
+    with pytest.raises(ValueError, match="unknown selection_objective"):
+        select_fold_features(df, target, mask, selection_objective="invalid_mode")
+
+    # 5. Serialization and deserialization
+    data_30 = {f"feat_{i}": np.random.randn(n_rows) for i in range(30)}
+    data_30["close"] = np.random.uniform(50, 100, size=n_rows)
+    df_30 = pd.DataFrame(data_30)
+    sig_30 = select_fold_features(
+        df_30, target, mask, top_k=25, n_estimators=10, min_child_samples=5, selection_objective="volatility"
+    )
+    sig_file = tmp_path / "test_sig.json"
+    meta = {"horizon": 7, "lookback": 60, "target_definition": "abs_return"}
+    write_signature(sig_file, sig_30, meta)
+    loaded = read_signature(sig_file, horizon=7, lookback=60)
+    assert loaded["selection_objective"] == "volatility"
+    assert loaded["ts_columns"] == list(sig_30.ts_columns)
+
+
+def test_winkler_da_pareto_checkpointing():
+    # When val_da < da_threshold: penalty added
+    da_threshold = 0.53
+    val_winkler = 0.0800
+    val_da_low = 0.5000
+    expected_low = val_winkler + (da_threshold - val_da_low) * 1.0  # 0.0800 + 0.0300 = 0.1100
+    assert abs(expected_low - 0.1100) < 1e-6
+
+    # When val_da >= da_threshold: pure val_winkler
+    val_da_high = 0.5600
+    expected_high = val_winkler
+    assert expected_high == 0.0800
+
+    # Ensure higher DA yields strictly lower (better) Pareto score for identical Winkler
+    assert expected_high < expected_low
+

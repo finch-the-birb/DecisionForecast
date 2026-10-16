@@ -1,0 +1,42 @@
+# Canonical Dual-token TimeXer (NeurIPS 2024 / TSLib).
+# Endogenous channels: 1 ([close]), 2 ([close, volume]), or 5 (OHLCV).
+# G_ts cross-attends to 25 TreeSHAP indicators; G_text cross-attends to 15D compact text.
+name: c1_dual
+variant: timexer_dual
+
+fusion:
+  kind: c1_dual
+  text_at_head: false
+  text_to_patches: false
+  text_as_exogenous: true
+  global_to_patch: true
+
+d_model: 64
+# null means 4 * d_model inside build_model, so a d_model override still widens the FFN.
+d_ff: null
+n_heads: 4
+e_layers: 2
+dropout: 0.1
+text_dim: 15
+n_features: null
+n_ts_features: 25
+fft_mode: patch
+
+use_prototypes: false
+n_prototypes: 10
+d_min: 0.5
+
+head:
+  pool: last
+  type: linear
+  hidden: 128
+  dropout: 0.0
+
+loss:
+  kind: huber
+  delta: 0.5
+  lambda_c: 0.1
+  lambda_e: 0.1
+  lambda_d: 0.01
+  gamma_dir: 0.0
+  alpha_corr: 0.0

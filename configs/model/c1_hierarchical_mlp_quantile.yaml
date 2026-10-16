@@ -1,0 +1,46 @@
+# TimeXerHierarchicalMLP with Multi-Quantile Pinball Loss for Distributional LTSF.
+# Models uncertainty corridors [q_0.10, q_0.50, q_0.90] on forecast horizon H=7.
+name: c1_hierarchical_mlp_quantile
+variant: timexer_hierarchical_mlp
+target_mode: delta
+
+train:
+  val_metric: pinball   # Оптимизация чекпоинта по multi-quantile pinball loss
+  patience: 7
+
+fusion:
+  kind: c1_hierarchical
+  text_at_head: false
+  text_to_patches: false
+  text_as_exogenous: true
+  global_to_patch: true
+
+d_model: 64
+n_heads: 4
+e_layers: 3
+d_ff: 256
+dropout: 0.1
+text_dim: 15
+n_features: null
+n_ts_features: 30
+fft_mode: bridge
+
+use_prototypes: false
+n_prototypes: 10
+d_min: 0.5
+
+head:
+  type: quantile
+  hidden: 128
+  dropout: 0.1
+  quantiles: [0.1, 0.5, 0.9]
+
+loss:
+  kind: pinball
+  lambda_cross: 1.0
+  lambda_c: 0.0
+  lambda_e: 0.0
+  lambda_d: 0.0
+  gamma_dir: 0.0
+  alpha_corr: 0.0
+  beta_scale: 0.0

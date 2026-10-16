@@ -48,13 +48,15 @@ TimeXL x TimeXer на FNSPID, абляции A / B / C0 / C1, метрики H1-
 - **C0**: TimeXer + прототипы + mid fusion **без** cross-attn (add/concat текста,
   НЕ через $G_en$).
 - **C1**: TimeXer + прототипы + mid fusion через канонический cross-attn TimeXer
-  ($G_en$ as query к **единственному** exogenous token — text).
-- TimeXer: все каналы OHLCV — endogenous patches (M-style) + per-variate $G_en$.
-  Не inverted price-exo. B/C0: `exo=None`. C1: exo = text token `[B,1,D]`.
-  Head: mean-pool патчей target-канала (`close`).
+  ($G_en$ as query к текстовым exo-токенам).
+- TimeXer: все каналы OHLCV — multivariate PatchEmbed (один токен на временной
+  патч, все каналы в нём) + **один** $G_en$. Не inverted price-exo. B/C0:
+  `exo=None`. C1: exo = text (`per_day` или `per_patch`); query cross-attn =
+  `[B,1,D]`. Head: mean-pool патчей **без** $G_en$.
 - Прототипы: **prototype-before-attn**, схема **G1+G2**:
   similarity/projection только по endogenous patch-токенам; $G_en$ не проецируется.
 - Residual injection: P <- P + W*S после PatchEmbed, затем стандартные слои TimeXer.
+  Точка входа текста — единственный фактор B/C0/C1 (`fusion.*` в yaml, assert в коде).
 - Текст: **замороженный** per-article embedding → дневная серия (train-mean `mu`,
   missing-day decay) → pooled `text` `[dim]` и `text_seq` `[T, dim]`. Не concat окна.
 - Один фактор за раз в абляциях; общий temporal split, горизонты H, seed.
@@ -65,6 +67,9 @@ TimeXL x TimeXer на FNSPID, абляции A / B / C0 / C1, метрики H1-
 - FNSPID: scripts/download_fnspid.py, scripts/load_fnspid.py (legacy, корень репо).
 - Новый код данных: src/data/ (см. структуру проекта ниже).
 - Dev: 10-20 тикеров для отладки пайплайна.
+- Split: `train_start` (2015-01-01) отсекает историю до нарезки окон;
+  train_end / val_end без изменений. Нормализация `per_window` (не глобальный z-score).
+  `mu` — train-статьи в `[train_start, train_end]`, файл `mu_{set}_{start}_{end}.npy`.
 - Основные эксперименты: **~50-100 тикеров**, 3-5 лет, фиксированный split
   (train/val/test по времени, без leakage).
 - Не обучать на полном FNSPID без явного запроса.
@@ -143,13 +148,14 @@ DecisionForecast/
 - DoD: A обучается на dev subset; MSE/MAE; 2-3 примера projection.
 
 ### Фаза 2 - TimeXer + B (Sprint 3-4)
-- Sanity TimeXer без TimeXL; опционально DLinear/PatchTST.
-- src/models/timexer.py + timexl_integration.py (G1+G2, late).
+- src/models/timexer_backbone.py: multivariate PatchEmbed (all OHLCV) + one G_en.
+  Sanity: `model=dlinear`, `model=timexer_plain` (Sprint 3).
+- src/models/timexer_b.py + timexl_integration.py (G1+G2, late). `fusion.*` asserted.
 - DoD: таблица A vs B (H1).
 
 ### Фаза 3 - C0, C1 (Sprint 5-6)
 - C0: mid без attention (не $G_en$ для текста).
-- C1: text-only exo token + cross-attn через $G_en$ (OHLCV полностью endogenous).
+- C1: text-only exo (`per_day`) + cross-attn через один $G_en$ (`src/models/timexer_c1.py`).
 - DoD: таблица A/B/C0/C1 + Δ(A→B), Δ(B→C0), Δ(C0→C1).
 
 ### Фаза 4 - H3 Explanatory (Sprint 7)
